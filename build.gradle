@@ -1,0 +1,386 @@
+import org.objectweb.asm.ClassReader
+import org.objectweb.asm.ClassWriter
+import org.objectweb.asm.Opcodes
+import org.objectweb.asm.commons.ClassRemapper
+import org.objectweb.asm.commons.Remapper
+import org.objectweb.asm.tree.*
+
+import java.util.zip.ZipFile
+
+buildscript {
+    repositories { mavenCentral() }
+    dependencies {
+        classpath 'org.ow2.asm:asm-tree:9.7'
+        classpath 'org.ow2.asm:asm-commons:9.7'
+    }
+}
+
+plugins {
+    id 'java'
+}
+
+group = 'fr.deltabuild'
+// Replaced by the tag version when GitHub Actions builds a release (-PreleaseVersion=...).
+version = findProperty('releaseVersion') ?: '0.1.0'
+
+def asmVersion = '9.7'
+
+sourceSets {
+    // Step 0 bench: compares DeltaAgent with mcpc-java17 on real classes. Not part of the build.
+    bench {
+        java { srcDirs = ['src/bench/java'] }
+    }
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 17
+}
+
+repositories { mavenCentral() }
+
+configurations {
+    // ASM served to the server in place of MCPC+'s ASM 4, patched below.
+    bundledAsm { transitive = false }
+    // The Remapping*Adapter classes Forge 1.6.4 still uses were removed after ASM 7.0.
+    legacyAsmCommons { transitive = false }
+    // The agent's own ASM, relocated so it never depends on what the server loads.
+    shadowAsm { transitive = false }
+}
+
+dependencies {
+    compileOnly "org.ow2.asm:asm:${asmVersion}"
+    compileOnly "org.ow2.asm:asm-tree:${asmVersion}"
+    compileOnly files('libs/launchwrapper-1.8.jar')
+
+    bundledAsm "org.ow2.asm:asm:${asmVersion}"
+    bundledAsm "org.ow2.asm:asm-tree:${asmVersion}"
+    bundledAsm "org.ow2.asm:asm-commons:${asmVersion}"
+    bundledAsm "org.ow2.asm:asm-analysis:${asmVersion}"
+    bundledAsm "org.ow2.asm:asm-util:${asmVersion}"
+    legacyAsmCommons 'org.ow2.asm:asm-commons:7.0'
+    shadowAsm "org.ow2.asm:asm:${asmVersion}"
+    shadowAsm "org.ow2.asm:asm-tree:${asmVersion}"
+
+    testImplementation platform('org.junit:junit-bom:5.10.2')
+    testImplementation 'org.junit.jupiter:junit-jupiter'
+    testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    testImplementation "org.ow2.asm:asm:${asmVersion}"
+    testImplementation "org.ow2.asm:asm-tree:${asmVersion}"
+    testImplementation files('libs/launchwrapper-1.8.jar')
+
+    benchImplementation "org.ow2.asm:asm:${asmVersion}"
+    benchImplementation "org.ow2.asm:asm-tree:${asmVersion}"
+    benchImplementation "org.ow2.asm:asm-util:${asmVersion}"
+}
+
+test {
+    useJUnitPlatform()
+}
+
+/*
+ * Patched ASM served to the server, unchanged from mcpc-java17. It behaves like the ASM 4 that
+ * Forge 1.6.4, MCPC+ and their mods were written for:
+ *  - Type.getType(String) accepts an internal name ("net/minecraftforge/event/Event"), as ASM 4
+ *    did; Forge's EventTransformer relies on it. It returns the object type of that name.
+ *  - Visitors declared with the ASM 4 API no longer throw "This feature requires ASM5" when they
+ *    read Java 8+ bytecode: the call is forwarded to the next visitor.
+ *  - The interface flag of method calls survives ASM 4 visitors (see LegacyAsmApi).
+ *  - Remapper.mapSignature returns an empty signature unchanged instead of failing.
+ *  - Remapper keeps the mapFieldName / mapMethodName overloads taking access flags that MCPC+'s
+ *    ASM 4 added: SpecialSource calls them to remap every Bukkit plugin.
+ */
+def patchedAsmDir = layout.buildDirectory.dir('patched-asm')
+def legacyApi = 'org/objectweb/asm/LegacyAsmApi'
+def asmPatches = [
+    'org/objectweb/asm/Type': { ClassNode node ->
+        def method = node.methods.find { it.name == 'getTypeInternal' }
+        def create = method.instructions.find {
+            it.opcode == Opcodes.NEW && it.desc == 'java/lang/IllegalArgumentException'
+        }
+        if (create == null) {
+            throw new GradleException('ASM Type.getTypeInternal: invalid descriptor branch not found')
+        }
+        def lenient = new InsnList()
+        lenient.add(new TypeInsnNode(Opcodes.NEW, 'org/objectweb/asm/Type'))
+        lenient.add(new InsnNode(Opcodes.DUP))
+        lenient.add(new IntInsnNode(Opcodes.BIPUSH, 12)) // Type.INTERNAL
+        lenient.add(new VarInsnNode(Opcodes.ALOAD, 0))
+        lenient.add(new VarInsnNode(Opcodes.ILOAD, 1))
+        lenient.add(new VarInsnNode(Opcodes.ILOAD, 2))
+        lenient.add(new MethodInsnNode(Opcodes.INVOKESPECIAL, 'org/objectweb/asm/Type', '<init>',
+                '(ILjava/lang/String;II)V', false))
+        lenient.add(new InsnNode(Opcodes.ARETURN))
+        replaceThrow(method, create, lenient)
+    },
+    'org/objectweb/asm/commons/Remapper': { ClassNode node ->
+        def method = node.methods.find { it.name == 'mapSignature' && it.desc == '(Ljava/lang/String;Z)Ljava/lang/String;' }
+        if (method == null) {
+            throw new GradleException('ASM Remapper.mapSignature not found')
+        }
+        // if (signature == null || signature.isEmpty()) return signature;
+        def remap = new LabelNode()
+        def unchanged = new LabelNode()
+        def guard = new InsnList()
+        guard.add(new VarInsnNode(Opcodes.ALOAD, 1))
+        guard.add(new JumpInsnNode(Opcodes.IFNULL, unchanged))
+        guard.add(new VarInsnNode(Opcodes.ALOAD, 1))
+        guard.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, 'java/lang/String', 'length', '()I', false))
+        guard.add(new JumpInsnNode(Opcodes.IFNE, remap))
+        guard.add(unchanged)
+        guard.add(new VarInsnNode(Opcodes.ALOAD, 1))
+        guard.add(new InsnNode(Opcodes.ARETURN))
+        guard.add(remap)
+        method.instructions.insert(guard)
+        addAccessOverloads(node, 'mapFieldName')
+        addAccessOverloads(node, 'mapMethodName')
+    },
+    'org/objectweb/asm/ClassVisitor': { ClassNode node -> removeApiChecks(node) },
+    'org/objectweb/asm/FieldVisitor': { ClassNode node -> removeApiChecks(node) },
+    'org/objectweb/asm/commons/InstructionAdapter': { ClassNode node -> removeApiChecks(node) },
+    'org/objectweb/asm/MethodVisitor': { ClassNode node ->
+        def fiveArgs = node.methods.find {
+            it.name == 'visitMethodInsn' && it.desc == '(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;Z)V'
+        }
+        def fourArgs = node.methods.find {
+            it.name == 'visitMethodInsn' && it.desc == '(ILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V'
+        }
+        // 5 args, ASM 4 visitor: record the interface flag instead of throwing, call the 4 args
+        // method, then drop the flag if nothing consumed it.
+        def interfaceCheck = fiveArgs.instructions.find {
+            it.opcode == Opcodes.LDC && it.cst instanceof String && it.cst.startsWith('INVOKESPECIAL/STATIC')
+        }
+        if (interfaceCheck == null) {
+            throw new GradleException('ASM MethodVisitor.visitMethodInsn: interface check not found')
+        }
+        def pend = new InsnList()
+        pend.add(new VarInsnNode(Opcodes.ILOAD, 5))
+        pend.add(new MethodInsnNode(Opcodes.INVOKESTATIC, legacyApi, 'pendInterface', '(Z)V', false))
+        replaceThrow(fiveArgs, previousNew(interfaceCheck), pend)
+        def legacyCall = fiveArgs.instructions.find {
+            it instanceof MethodInsnNode && it.name == 'visitMethodInsn' && it.desc == fourArgs.desc
+        }
+        fiveArgs.instructions.insert(legacyCall,
+                new MethodInsnNode(Opcodes.INVOKESTATIC, legacyApi, 'clearInterface', '()V', false))
+        // 4 args: use the recorded flag rather than guessing it from the opcode.
+        def forward = fourArgs.instructions.find {
+            it instanceof MethodInsnNode && it.name == 'visitMethodInsn' && it.desc == fiveArgs.desc
+        }
+        fourArgs.instructions.insertBefore(forward,
+                new MethodInsnNode(Opcodes.INVOKESTATIC, legacyApi, 'interfaceFlag', '(Z)Z', false))
+        removeApiChecks(node)
+    },
+]
+
+/**
+ * Gives Remapper the (owner, name, descriptor, access) overload of methodName that MCPC+'s ASM 4
+ * had: the 3 argument method calls it with access 0, and it returns the name unchanged.
+ */
+def addAccessOverloads(ClassNode node, String methodName) {
+    def string = 'Ljava/lang/String;'
+    def threeArgs = "(${string}${string}${string})${string}".toString()
+    def fourArgs = "(${string}${string}${string}I)${string}".toString()
+    def method = node.methods.find { it.name == methodName && it.desc == threeArgs }
+    if (method == null) {
+        throw new GradleException("ASM Remapper.${methodName} not found")
+    }
+    if (node.methods.any { it.name == methodName && it.desc == fourArgs }) {
+        throw new GradleException("ASM Remapper.${methodName} already has an access overload")
+    }
+    // return this.<methodName>(owner, name, descriptor, 0);
+    def delegate = new InsnList()
+    delegate.add(new VarInsnNode(Opcodes.ALOAD, 0))
+    delegate.add(new VarInsnNode(Opcodes.ALOAD, 1))
+    delegate.add(new VarInsnNode(Opcodes.ALOAD, 2))
+    delegate.add(new VarInsnNode(Opcodes.ALOAD, 3))
+    delegate.add(new InsnNode(Opcodes.ICONST_0))
+    delegate.add(new MethodInsnNode(Opcodes.INVOKEVIRTUAL, node.name, methodName, fourArgs, false))
+    delegate.add(new InsnNode(Opcodes.ARETURN))
+    method.instructions = delegate
+    method.tryCatchBlocks = []
+    method.localVariables = null
+    // public String <methodName>(String owner, String name, String descriptor, int access) { return name; }
+    def overload = new MethodNode(Opcodes.ACC_PUBLIC, methodName, fourArgs, null, null)
+    overload.instructions.add(new VarInsnNode(Opcodes.ALOAD, 2))
+    overload.instructions.add(new InsnNode(Opcodes.ARETURN))
+    node.methods.add(overload)
+}
+
+/** The NEW of the exception thrown right after insn. */
+def previousNew(AbstractInsnNode insn) {
+    while (insn.opcode != Opcodes.NEW) {
+        insn = insn.previous
+    }
+    return insn
+}
+
+/** Replaces the instructions from create to the next ATHROW. */
+def replaceThrow(MethodNode method, AbstractInsnNode create, InsnList replacement) {
+    def insn = create
+    while (insn.opcode != Opcodes.ATHROW) {
+        def next = insn.next
+        method.instructions.remove(insn)
+        insn = next
+    }
+    method.instructions.insertBefore(insn, replacement)
+    method.instructions.remove(insn)
+}
+
+/** Removes every throw new UnsupportedOperationException("<feature> requires ASMx"). */
+def removeApiChecks(ClassNode node) {
+    int removed = 0
+    node.methods.each { method ->
+        def checks = method.instructions.findAll {
+            it.opcode == Opcodes.LDC && it.cst instanceof String && it.cst ==~ /.* requires ASM\d+/
+        }
+        checks.each { check ->
+            replaceThrow(method, previousNew(check), new InsnList())
+            removed++
+        }
+    }
+    if (removed == 0) {
+        throw new GradleException("ASM ${node.name}: no API check found")
+    }
+}
+
+def patchAsm = tasks.register('patchAsm') {
+    inputs.files configurations.bundledAsm
+    inputs.property 'patches', asmPatches.keySet().join(',')
+    outputs.dir patchedAsmDir
+    doLast {
+        asmPatches.each { name, patch ->
+            def bytes = configurations.bundledAsm.collect { jar ->
+                zipTree(jar).matching { include "${name}.class" }.files
+            }.flatten().first().bytes
+            def node = new ClassNode()
+            new ClassReader(bytes).accept(node, 0)
+            patch(node)
+            def writer = new ClassWriter(ClassWriter.COMPUTE_MAXS)
+            node.accept(writer)
+            def out = patchedAsmDir.get().file("${name}.class").asFile
+            out.parentFile.mkdirs()
+            out.bytes = writer.toByteArray()
+        }
+    }
+}
+
+/*
+ * The agent's classes and its own ASM copy, with org.objectweb.asm moved under
+ * fr.deltabuild.deltaagent.shadow.asm. LegacyAsmApi stays where it is: the patched ASM served to
+ * the server calls it.
+ */
+def asmPrefix = 'org/objectweb/asm/'
+def shadowPrefix = 'fr/deltabuild/deltaagent/shadow/asm/'
+def mainClassesDirs = sourceSets.main.output.classesDirs
+def relocatedDir = layout.buildDirectory.dir('relocated')
+def relocate = tasks.register('relocateAgent') {
+    dependsOn tasks.named('classes')
+    inputs.files(mainClassesDirs)
+    inputs.files(configurations.shadowAsm)
+    outputs.dir(relocatedDir)
+    doLast {
+        def out = relocatedDir.get().asFile
+        out.deleteDir()
+        def remapper = new Remapper() {
+            @Override
+            String map(String name) {
+                return name.startsWith(asmPrefix) && name != legacyApi
+                        ? shadowPrefix + name.substring(asmPrefix.length()) : name
+            }
+        }
+        def write = { byte[] bytes ->
+            def reader = new ClassReader(bytes)
+            byte[] result = bytes
+            if (reader.className != legacyApi) {
+                def writer = new ClassWriter(0)
+                reader.accept(new ClassRemapper(writer, remapper), 0)
+                result = writer.toByteArray()
+            }
+            def target = new File(out, remapper.map(reader.className) + '.class')
+            target.parentFile.mkdirs()
+            target.bytes = result
+        }
+        mainClassesDirs.each { dir ->
+            if (dir.isDirectory()) {
+                dir.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+                    if (f.name.endsWith('.class')) {
+                        write(f.bytes)
+                    }
+                }
+            }
+        }
+        configurations.shadowAsm.each { jar ->
+            new ZipFile(jar).withCloseable { zip ->
+                zip.entries().findAll {
+                    it.name.startsWith(asmPrefix) && it.name.endsWith('.class')
+                }.each { write(zip.getInputStream(it).bytes) }
+            }
+        }
+    }
+}
+
+tasks.named('jar') {
+    enabled = false
+}
+
+def agentJar = tasks.register('agentJar', Jar) {
+    group = 'build'
+    description = 'Builds build/libs/DeltaAgent.jar'
+    dependsOn patchAsm
+    archiveFileName = 'DeltaAgent.jar'
+    destinationDirectory = layout.buildDirectory.dir('libs')
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+    from(relocate)
+    from(patchedAsmDir)
+    from({ configurations.bundledAsm.collect { zipTree(it) } }) {
+        include 'org/objectweb/asm/**'
+        exclude asmPatches.keySet().collect { "${it}.class" }
+    }
+    from({ configurations.legacyAsmCommons.collect { zipTree(it) } }) {
+        include 'org/objectweb/asm/commons/Remapping*Adapter*.class'
+    }
+    from(tasks.named('processResources'))
+    from('LICENSE') { into 'META-INF' }
+    from('licenses') { into 'META-INF/licenses' }
+    manifest {
+        attributes(
+            'Premain-Class': 'fr.deltabuild.deltaagent.DeltaAgent',
+            'Can-Redefine-Classes': 'false',
+            'Can-Retransform-Classes': 'false',
+            'Implementation-Title': 'DeltaAgent',
+            'Implementation-Version': project.version,
+            'Implementation-Vendor': 'DeltaBuild',
+            'Bundled-ASM-Version': asmVersion
+        )
+    }
+}
+
+tasks.named('assemble') {
+    dependsOn agentJar
+}
+
+/*
+ * Step 0 bench: runs the class patches of mcpc-java17 and of DeltaAgent on the same classes and
+ * fails on any difference. Needs libs/mcpc-java17-agent.jar and libs/mcpc-srg.jar (not published);
+ * more jars to scan (mods, plugins) can be given with -PbenchJars=a.jar,b.jar.
+ */
+tasks.register('compareMcpcJava17', JavaExec) {
+    group = 'verification'
+    description = 'Compares DeltaAgent with mcpc-java17 on real classes'
+    dependsOn agentJar
+    classpath = sourceSets.bench.runtimeClasspath
+    mainClass = 'fr.deltabuild.deltaagent.bench.CompareMcpcJava17'
+    doFirst {
+        ['libs/mcpc-java17-agent.jar', 'libs/mcpc-srg.jar'].each { name ->
+            if (!file(name).exists()) {
+                throw new GradleException("Missing ${name} (see README, section Compiler)")
+            }
+        }
+        def jars = ['libs/mcpc-srg.jar']
+        def extra = findProperty('benchJars')
+        if (extra) {
+            jars.addAll(extra.toString().split(',').collect { it.trim() }.findAll { it })
+        }
+        args = ['libs/mcpc-java17-agent.jar', agentJar.get().archiveFile.get().asFile.path] + jars
+    }
+}
