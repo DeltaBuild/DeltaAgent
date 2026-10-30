@@ -7,13 +7,13 @@ import fr.deltabuild.deltaagent.core.PatchRegistry;
 import fr.deltabuild.deltaagent.core.Safety;
 import fr.deltabuild.deltaagent.height.HeightGuard;
 import fr.deltabuild.deltaagent.height.HeightModule;
-import fr.deltabuild.deltaagent.ids.legacy.LegacyIdTransformer;
+import fr.deltabuild.deltaagent.ids.IdsModule;
 import fr.deltabuild.deltaagent.java17.Java17;
 import java.lang.instrument.Instrumentation;
 
 /**
- * Entry point. Step 1: Java 17 support, the world from Y -64 to 319, and the placeholder IDs of
- * mcpc-java17 until the ids module replaces them.
+ * Entry point. Step 2: Java 17 support, the world from Y -64 to 319, and block and item registries
+ * up to 2^24 IDs with items above 31999 saved and sent.
  */
 public final class DeltaAgent {
 
@@ -21,8 +21,9 @@ public final class DeltaAgent {
 
     public static void premain(String args, Instrumentation inst) {
         boolean height = HeightModule.enabled();
+        boolean ids = IdsModule.enabled();
         Log.info("core", "DeltaAgent " + VERSION + " on Java " + System.getProperty("java.version")
-                + " (modules: java17" + (height ? ", height" : "") + ", ids placeholders).");
+                + " (modules: java17" + (height ? ", height" : "") + (ids ? ", ids" : "") + ").");
         OtherAgents others = OtherAgents.onCommandLine();
         if (others.has(OtherAgents.Known.MCPC_JAVA17)) {
             Safety.stop("core", "mcpc-java17-agent.jar is loaded too. DeltaAgent replaces it: remove its -javaagent option.");
@@ -35,13 +36,17 @@ public final class DeltaAgent {
 
         // JVM transformers run in the order they are added.
         Java17.start(inst);
-        inst.addTransformer(new LegacyIdTransformer());
 
         PatchRegistry registry = new PatchRegistry();
         if (height) {
             HeightModule.start(inst, registry);
         } else {
             HeightGuard.check(heightAgent == null ? null : heightAgent.displayName);
+        }
+        if (ids) {
+            IdsModule.start(registry);
+        } else {
+            IdsModule.guardOnly(registry);
         }
         inst.addTransformer(new GameTransformerInstaller(registry));
     }

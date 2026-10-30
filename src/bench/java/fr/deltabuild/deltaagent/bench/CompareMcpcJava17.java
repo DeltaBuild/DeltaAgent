@@ -20,9 +20,10 @@ import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.util.TraceClassVisitor;
 
 /**
- * Step 0 bench: DeltaAgent must patch classes exactly like mcpc-java17, apart from the names of its
- * own classes. Both agent jars are loaded in their own class loader, so each one runs with the ASM
- * it ships.
+ * Java 17 bench: the java17 module of DeltaAgent must patch classes exactly like mcpc-java17, apart
+ * from the names of its own classes. Both agent jars are loaded in their own class loader, so each
+ * one runs with the ASM it ships. The ID patches of mcpc-java17 are left out: the ids module
+ * replaced them in step 2.
  *
  * <p>Arguments: mcpc-java17-agent.jar, DeltaAgent.jar, then the jars whose classes are patched.
  */
@@ -32,7 +33,6 @@ public final class CompareMcpcJava17 {
     private static final String[][] RENAMES = {
         {"gg/nationsglory/mcpcj17/shim/", "fr/deltabuild/deltaagent/java17/shim/"},
         {"gg.nationsglory.mcpcj17.shim.", "fr.deltabuild.deltaagent.java17.shim."},
-        {"gg/nationsglory/mcpcj17/IdCapacity", "fr/deltabuild/deltaagent/ids/legacy/IdCapacity"},
         {"gg/nationsglory/mcpcj17/LaunchHooks", "fr/deltabuild/deltaagent/java17/LaunchHooks"},
     };
     private static final int SHOWN_DIFFERENCES = 20;
@@ -41,10 +41,8 @@ public final class CompareMcpcJava17 {
         if (args.length < 3) {
             throw new IllegalArgumentException("usage: <mcpc-java17-agent.jar> <DeltaAgent.jar> <jar to scan>...");
         }
-        Agent oldAgent = new Agent(new File(args[0]), "gg.nationsglory.mcpcj17.ClassPatcher",
-                "gg.nationsglory.mcpcj17.IdPatches");
-        Agent newAgent = new Agent(new File(args[1]), "fr.deltabuild.deltaagent.java17.ClassPatcher",
-                "fr.deltabuild.deltaagent.ids.legacy.IdPatches");
+        Agent oldAgent = new Agent(new File(args[0]), "gg.nationsglory.mcpcj17.ClassPatcher");
+        Agent newAgent = new Agent(new File(args[1]), "fr.deltabuild.deltaagent.java17.ClassPatcher");
 
         List<String> differences = new ArrayList<String>();
         List<String> patched = new ArrayList<String>();
@@ -148,29 +146,20 @@ public final class CompareMcpcJava17 {
         }
     }
 
-    /** One agent jar, isolated, with the same steps as its JVM transformers: sun.reflect, then IDs. */
+    /** One agent jar, isolated, with the step of its java17 JVM transformer: sun.reflect. */
     private static final class Agent {
 
         private final Method redirect;
-        private final Method ids;
 
-        Agent(File jar, String classPatcher, String idPatches) throws Exception {
+        Agent(File jar, String classPatcher) throws Exception {
             ClassLoader loader = new URLClassLoader(new URL[] {jar.toURI().toURL()}, ClassLoader.getPlatformClassLoader());
             redirect = Class.forName(classPatcher, true, loader).getDeclaredMethod("redirectSunReflect", byte[].class);
             redirect.setAccessible(true);
-            ids = Class.forName(idPatches, true, loader).getDeclaredMethod("patch", String.class, byte[].class);
-            ids.setAccessible(true);
         }
 
-        /** The patched class, or null when neither step changed it. */
+        /** The patched class, or null when unchanged. */
         byte[] patch(String name, byte[] bytes) throws Exception {
-            byte[] redirected = (byte[]) redirect.invoke(null, (Object) bytes);
-            byte[] current = redirected != null ? redirected : bytes;
-            byte[] raised = (byte[]) ids.invoke(null, name, current);
-            if (raised != null) {
-                return raised;
-            }
-            return redirected;
+            return (byte[]) redirect.invoke(null, (Object) bytes);
         }
     }
 

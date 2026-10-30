@@ -31,6 +31,10 @@ public final class PatchTarget {
         return new PatchTarget(module, className, true, null, replacement);
     }
 
+    public String module() {
+        return module;
+    }
+
     public String className() {
         return className;
     }

@@ -23,7 +23,7 @@ SOFTWARE.
 ---
 
 Code derived from mcpc-java17 (src/main/java/fr/deltabuild/deltaagent/java17,
-src/main/java/fr/deltabuild/deltaagent/ids/legacy,
+src/main/java/fr/deltabuild/deltaagent/ids/Placeholders.java,
 src/main/java/org/objectweb/asm/LegacyAsmApi.java and the ASM patches of
 build.gradle) is also:
 

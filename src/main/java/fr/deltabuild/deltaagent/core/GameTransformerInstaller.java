@@ -48,6 +48,8 @@ public final class GameTransformerInstaller implements ClassFileTransformer {
         if (position < 0) {
             return; // FML has not added its deobfuscation yet
         }
+        registry.runLoaderChecks(launchClassLoader);
+        RuntimeClasses.addTo(launchClassLoader);
         transformers.add(position, new GameTransformer(registry));
         installed = true;
         Log.info("core", "Game transformer installed after " + transformers.get(position - 1).getClass().getName()

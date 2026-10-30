@@ -1,5 +1,6 @@
 package fr.deltabuild.deltaagent.core;
 
+import java.util.List;
 import net.minecraft.launchwrapper.IClassTransformer;
 import org.objectweb.asm.tree.ClassNode;
 
@@ -17,16 +18,28 @@ public final class GameTransformer implements IClassTransformer {
 
     @Override
     public byte[] transform(String name, String transformedName, byte[] bytes) {
-        if (bytes == null || transformedName == null) {
+        if (transformedName == null) {
             return bytes;
         }
-        PatchTarget target = registry.get(transformedName);
-        if (target == null) {
+        if (bytes == null) {
+            return RuntimeClasses.find(transformedName);
+        }
+        List<PatchTarget> targets = registry.get(transformedName);
+        if (targets == null) {
             return bytes;
         }
+        byte[] current = bytes;
+        for (PatchTarget target : targets) {
+            current = apply(target, transformedName, current);
+        }
+        return current;
+    }
+
+    /** One target on the bytes left by the previous one; a failed optional patch changes nothing. */
+    private static byte[] apply(PatchTarget target, String className, byte[] bytes) {
         try {
             if (target.replacement != null) {
-                Log.info(target.module, "Replaced " + transformedName + ".");
+                Log.info(target.module, "Replaced " + className + ".");
                 return target.replacement;
             }
             ClassNode node = Asm.read(bytes);
@@ -34,13 +47,13 @@ public final class GameTransformer implements IClassTransformer {
             if (changes <= 0) {
                 throw new IllegalStateException("expected code not found");
             }
-            Log.info(target.module, "Patched " + transformedName + " (" + changes + " change" + (changes > 1 ? "s" : "") + ").");
+            Log.info(target.module, "Patched " + className + " (" + changes + " change" + (changes > 1 ? "s" : "") + ").");
             return Asm.write(node);
         } catch (Throwable t) {
             if (target.critical) {
-                Safety.stop(target.module, "Could not patch " + transformedName + ": " + t);
+                Safety.stop(target.module, "Could not patch " + className + ": " + t);
             }
-            Log.warn(target.module, "Left " + transformedName + " unchanged: " + t);
+            Log.warn(target.module, "Left " + className + " unchanged: " + t);
             return bytes;
         }
     }

@@ -2,6 +2,7 @@ package fr.deltabuild.deltaagent.core;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -75,11 +76,71 @@ class GameTransformerTest {
     }
 
     @Test
-    void refusesTwoPatchesForOneClass() {
+    void appliesSeveralPatchesInOrder() {
         PatchRegistry registry = new PatchRegistry();
-        registry.add(PatchTarget.patch("height", "a.Target", true, node -> 1));
+        registry.add(PatchTarget.patch("height", "a.Target", true, node -> addField(node, "first")));
+        registry.add(PatchTarget.patch("ids", "a.Target", true, node -> addField(node, "second")));
+        ClassNode node = Asm.read(new GameTransformer(registry).transform("x", "a.Target", emptyClass("a/Target", Opcodes.V1_6)));
+        assertEquals("first", node.fields.get(0).name);
+        assertEquals("second", node.fields.get(1).name);
+    }
+
+    @Test
+    void patchesTheReplacementWhateverTheOrderOfAdding() {
+        PatchRegistry registry = new PatchRegistry();
+        registry.add(PatchTarget.patch("ids", "a.Target", true, node -> addField(node, "added")));
+        registry.add(PatchTarget.replace("height", "a.Target", emptyClass("a/Target", Opcodes.V1_6)));
+        ClassNode node = Asm.read(new GameTransformer(registry).transform("x", "a.Target", emptyClass("a/Target", Opcodes.V1_5)));
+        assertEquals(Opcodes.V1_6, node.version);
+        assertEquals("added", node.fields.get(0).name);
+    }
+
+    @Test
+    void skipsAFailedOptionalPatchButAppliesTheOthers() {
+        PatchRegistry registry = new PatchRegistry();
+        registry.add(PatchTarget.patch("height", "a.Target", false, node -> {
+            addField(node, "lost");
+            throw new IllegalStateException("broken");
+        }));
+        registry.add(PatchTarget.patch("ids", "a.Target", true, node -> addField(node, "kept")));
+        ClassNode node = Asm.read(new GameTransformer(registry).transform("x", "a.Target", emptyClass("a/Target", Opcodes.V1_6)));
+        assertEquals(1, node.fields.size());
+        assertEquals("kept", node.fields.get(0).name);
+    }
+
+    @Test
+    void refusesTwoReplacementsForOneClass() {
+        PatchRegistry registry = new PatchRegistry();
+        registry.add(PatchTarget.replace("height", "a.Target", emptyClass("a/Target", Opcodes.V1_6)));
         assertThrows(IllegalStateException.class,
-                () -> registry.add(PatchTarget.patch("ids", "a.Target", true, node -> 1)));
+                () -> registry.add(PatchTarget.replace("ids", "a.Target", emptyClass("a/Target", Opcodes.V1_6))));
+    }
+
+    @Test
+    void removesAWholeModule() {
+        PatchRegistry registry = new PatchRegistry();
+        registry.add(PatchTarget.patch("height", "a.Shared", true, node -> 1));
+        registry.add(PatchTarget.patch("ids", "a.Shared", true, node -> 1));
+        registry.add(PatchTarget.patch("ids", "a.Alone", true, node -> 1));
+        assertEquals(2, registry.removeModule("ids"));
+        assertEquals(1, registry.size());
+        assertEquals(1, registry.get("a.Shared").size());
+        assertNull(registry.get("a.Alone"));
+    }
+
+    @Test
+    void handsRuntimeClassesOverWhenTheLoaderHasNoBytes() {
+        GameTransformer transformer = new GameTransformer(new PatchRegistry());
+        byte[] bytes = transformer.transform("x", "fr.deltabuild.deltaagent.runtime.ItemIds", null);
+        assertEquals("fr/deltabuild/deltaagent/runtime/ItemIds", Asm.read(bytes).name);
+        assertNull(transformer.transform("x", "fr.deltabuild.deltaagent.runtime.Missing", null));
+        assertNull(transformer.transform("x", "fr.deltabuild.deltaagent.core.Log", null));
+        assertNull(transformer.transform("x", "a.Missing", null));
+    }
+
+    private static int addField(ClassNode node, String name) {
+        node.fields.add(new FieldNode(Opcodes.ACC_PUBLIC, name, "I", null, null));
+        return 1;
     }
 
     @Test
