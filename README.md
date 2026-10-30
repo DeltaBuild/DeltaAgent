@@ -4,11 +4,11 @@ Javaagent unique pour serveur MCPC+ 1.6.4 : Java 17, monde de Y -64 à Y 319 et 
 
 DeltaAgent remplace [mcpc-java17](https://github.com/Loyto-SKHR/mcpc-java17) et [DeltaHeight](https://github.com/DeltaBuild/DeltaHeight). Il avance par étapes ; chaque étape garde le serveur jouable.
 
-## État : étape 3
+## État : étape 4
 
 - **java17** : reprise de mcpc-java17 2.1.0 à l'identique (version de Java simulée, modules du JDK ouverts, `sun.reflect`, `Launch`, ASM 9.7).
 - **hauteur** : reprise de DeltaHeight 1.0.0 (24 sections, protocole NGClient), avec en plus le patch AntiXray, le superflat réglable par monde et la lecture des maps de NGHeight.
-- **IDs** : registres de blocs et d'objets qui grandissent jusqu'à 2^24 IDs comme dans NGClient, objets au-delà de 31 999 sauvegardés et transmis au format NGClient (`idExt`), chunks qui stockent des IDs de bloc sur 24 bits (`Add2`, `BlocksB3`), envoyés aux joueurs dans les blocs de données de NGClient. Les métadonnées et les biomes restent sur 4 et 8 bits : le passage à 16 bits arrive à l'étape 4.
+- **IDs** : registres de blocs et d'objets qui grandissent jusqu'à 2^24 IDs comme dans NGClient, objets au-delà de 31 999 sauvegardés et transmis au format NGClient (`idExt`), chunks qui stockent des IDs de bloc sur 24 bits (`Add2`, `BlocksB3`) des métadonnées sur 16 bits (`DataAdd`, `Data2`) et des biomes sur 16 bits (`Biomes16`), envoyés aux joueurs dans les blocs de données de NGClient.
 
 ## Prérequis
 
@@ -31,7 +31,7 @@ Les options `-XX:+UseConcMarkSweepGC` et `-XX:CMS...` n'existent plus en Java 17
 Au démarrage, la console doit afficher :
 
 ```
-[DeltaAgent/core] DeltaAgent 0.4.0-rc.1 on Java 17.0.x (modules: java17, height, ids).
+[DeltaAgent/core] DeltaAgent 0.5.0-rc.1 on Java 17.0.x (modules: java17, height, ids).
 [DeltaAgent/java17] Java 17.0.x detected, reporting 1.7.0_80 to bypass the MCPC+ version check.
 [DeltaAgent/height] World extended to Y -64..319 (24 sections), NGClient protocol (NGNEID marker).
 [DeltaAgent/ids] Block and item registries start at 131072 IDs and grow up to 16777216. ...
@@ -130,22 +130,25 @@ Les tableaux de blocs et d'objets démarrent à 131 072 cases, comme dans NGClie
 
 Un agrandissement est signalé dans la console : un mod qui a gardé une copie des anciens tableaux ne verrait pas les nouveaux IDs. Le message donne la taille à mettre dans `-Ddeltaagent.ids.capacity` pour partir directement à la bonne taille.
 
-### Blocs au-delà de 4095
+### Blocs au-delà de 4095 et métadonnées au-delà de 15
 
-Ils se posent, se sauvegardent et s'envoient aux joueurs comme les autres, jusqu'à 16 777 215.
+Ils se posent, se sauvegardent et s'envoient aux joueurs comme les autres : IDs jusqu'à 16 777 215, métadonnées jusqu'à 65 535.
 
-**Sauvegarde.** Chaque section garde ses IDs sur quatre plans, avec les noms de NGClient :
+**Sauvegarde.** Chaque section garde ses IDs sur quatre plans et ses métadonnées sur trois :
 
-| Tag | Bits de l'ID | Taille |
+| Tag | Contenu | Taille |
 | --- | --- | --- |
-| `Blocks` | 0 à 7 | 4096 octets |
-| `Add` | 8 à 11 | 2048 octets |
-| `Add2` | 12 à 15 | 2048 octets |
-| `BlocksB3` | 16 à 23 | 4096 octets |
+| `Blocks` | ID, bits 0 à 7 | 4096 octets |
+| `Add` | ID, bits 8 à 11 | 2048 octets |
+| `Add2` | ID, bits 12 à 15 | 2048 octets |
+| `BlocksB3` | ID, bits 16 à 23 | 4096 octets |
+| `Data` | méta, bits 0 à 3 | 2048 octets |
+| `DataAdd` | méta, bits 4 à 7 | 2048 octets |
+| `Data2` | méta, bits 8 à 15 | 4096 octets |
 
-`Add2` et `BlocksB3` ne sont écrits que s'ils contiennent autre chose que des zéros : une section sans bloc au-delà de 4095 est sauvegardée comme en vanilla. Les sections au format palette des serveurs NationsGlory (`Palette`, `PaletteData`, `PaletteBits`) sont lues, puis réécrites avec `Add2` et `BlocksB3` à la sauvegarde suivante. Un bloc dont l'ID n'est plus enregistré (mod retiré) devient de l'air au chargement, comme MCPC+ le fait déjà.
+`Add2`, `BlocksB3`, `Data2` sont les noms de NGClient ; les sources de NationsGlory ne nomment pas le plan des bits 4 à 7, `DataAdd` est le choix de DeltaAgent. Les plans au-delà du vanilla ne sont écrits que s'ils contiennent autre chose que des zéros : une section sans bloc au-delà de 4095 ni méta au-delà de 15 est sauvegardée comme en vanilla. Les sections au format palette des serveurs NationsGlory (`Palette`, `PaletteData`, `PaletteBits`) sont lues, puis réécrites avec `Add2` et `BlocksB3` à la sauvegarde suivante. Un bloc dont l'ID n'est plus enregistré (mod retiré) devient de l'air au chargement, comme MCPC+ le fait déjà.
 
-Dès qu'une section avec ces plans est lue ou sauvegardée, le `level.dat` reçoit `NGBlockIdFormat` : 1 pour `Add2`, 2 pour une palette lue, 3 pour `BlocksB3`. Une map marquée ne démarre plus avec `-Ddeltaagent.ids=false` (voir Sécurités) : un serveur sans ces plans lirait d'autres blocs à la place, ou de l'air, et le garderait à la sauvegarde suivante.
+Dès qu'une section avec ces plans est lue ou sauvegardée, le `level.dat` reçoit `NGBlockIdFormat` : 1 pour `Add2`, 2 pour une palette lue, 3 pour `BlocksB3`, 4 pour les métadonnées sur 16 bits. Une map marquée ne démarre plus avec `-Ddeltaagent.ids=false` (voir Sécurités) : un serveur sans ces plans lirait d'autres blocs à la place, ou de l'air, et le garderait à la sauvegarde suivante.
 
 **Réseau.** Seul Packet56 (envoi de chunks) peut porter les plans hauts. Après les données vanilla de chaque chunk, il contient les cinq blocs que NGClient attend, dans cet ordre, chacun avec son en-tête (code, version 1, masque de sections sur 24 bits) :
 
@@ -153,24 +156,35 @@ Dès qu'une section avec ces plans est lue ou sauvegardée, le `level.dat` reço
 | --- | --- | --- |
 | `NGWL` | eau dans les blocs (vide) | 512 octets |
 | `NGID` | `Add2` | 2048 octets |
-| `NGMD` | métadonnées bits 4 à 15 (vide jusqu'à l'étape 4) | 6144 octets |
-| `NGBI` | biomes bits 8 à 15 (absent jusqu'à l'étape 4) | 256 octets par chunk |
+| `NGMD` | métadonnées bits 4 à 7 (2048 octets) puis 8 à 15 (4096) | 6144 octets |
+| `NGBI` | biomes bits 8 à 15, si le chunk a `Biomes16` (voir Biomes) | 256 octets par chunk |
 | `NGB3` | `BlocksB3` | 4096 octets |
 
-Vides, ces blocs ajoutent 42 octets par chunk. Les autres paquets de blocs sont remplacés juste avant l'envoi quand ils ne peuvent pas porter l'ID :
+Vides, ces blocs ajoutent 42 octets par chunk. Les autres paquets de blocs sont remplacés juste avant l'envoi quand ils ne peuvent pas porter le bloc :
 
-- Packet53 (un bloc) porte 16 bits : au-delà de 65 535, le chunk entier part en Packet56 ;
-- Packet52 (plusieurs blocs) porte 12 bits : avec un ID de 4096 à 65 535, il devient un Packet53 par bloc, au-delà le chunk part en Packet56 ;
-- Packet51 (sections modifiées) : NGClient efface `Add2` et `BlocksB3` des sections qu'il reçoit, donc des sections qui en ont partent en Packet56.
+- Packet53 (un bloc) porte un ID sur 16 bits et une méta sur 8 : au-delà, le chunk entier part en Packet56 ;
+- Packet52 (plusieurs blocs) porte un ID sur 12 bits et une méta sur 4 : au-delà, il devient un Packet53 par bloc, ou le chunk part en Packet56 si un bloc dépasse aussi Packet53 ;
+- Packet51 (sections modifiées) : NGClient efface `Add2` et `BlocksB3` des sections qu'il reçoit et garde ses anciens plans de méta, donc des sections qui ont l'un de ces plans partent en Packet56.
 
 Pendant une même mise à jour de chunk, un joueur reçoit le chunk entier au plus une fois. Packet56 recrée le chunk côté client : les tile entities du chunk sont renvoyées juste après, et les entités qui s'y trouvent réapparaissent pour ce joueur (Packet29 puis nouvel envoi).
 
-**Le reste du serveur.** `ChunkSnapshot` et `getTypeId()` de Bukkit donnent l'ID complet. L'anti-xray de Spigot (coupé par défaut dans MCPC+) ne cache pas un bloc au-delà de 255 dont l'octet bas ressemble à un minerai. Sur les cartes (objet map), un bloc au-delà de 4095 prend la couleur de son matériau.
+**Le reste du serveur.** `ChunkSnapshot` et `getTypeId()` de Bukkit donnent l'ID complet. Une méta hors de 0..65 535 donne une erreur qui indique la position, comme dans NGClient : le vanilla gardait les 4 bits du bas sans rien dire. L'anti-xray de Spigot (coupé par défaut dans MCPC+) ne cache pas un bloc au-delà de 255 dont l'octet bas ressemble à un minerai. Sur les cartes (objet map), un bloc au-delà de 4095 prend la couleur de son matériau.
 
 **Limites.**
 
-- NGClient refuse un chunk de plus de 393 216 octets une fois décompressé. Avec la hauteur étendue, un chunk peut dépasser quand une vingtaine de ses sections ont `BlocksB3` (21 au plus si toutes ont aussi `Add` et `Add2`) : la pose d'un bloc au-delà de 65 535 qui ferait dépasser est refusée, et la console le signale. Un chunk déjà trop gros (posé par un autre serveur ou directement dans la section) est signalé à l'envoi.
+- NGClient refuse un chunk de plus de 393 216 octets une fois décompressé. Avec la hauteur étendue, un chunk peut dépasser quand une vingtaine de ses sections ont `BlocksB3` (21 au plus si toutes ont aussi `Add` et `Add2`, 15 si elles ont en plus des métas au-delà de 15) : la pose qui ferait dépasser est refusée, et la console le signale. Un chunk déjà trop gros (posé par un autre serveur, directement dans la section, ou sans le module de hauteur avec tous les plans dans ses 16 sections) est signalé à l'envoi.
+- Bukkit passe la méta en `byte` (`Block.getData()`, `setData()`) et `ChunkSnapshot.getBlockData()` la lit sur 4 bits : au-delà, il faut passer par le code du serveur.
 - Particules de casse (Packet61), blocs qui tombent (Packet23) et événements de bloc (Packet54, coffres, pistons) gardent les limites vanilla : NGClient les lit sur 12 ou 16 bits.
+
+### Biomes au-delà de 255
+
+La liste des biomes (`BiomeGenBase.biomeList`) et celle de `BiomeDictionary` passent de 256 à 65 536 cases, la taille fixe de NGClient : un mod peut enregistrer un biome jusqu'à 65 535.
+
+Chaque chunk garde l'octet bas de ses biomes dans `Biomes`, comme en vanilla, et l'octet haut dans un tableau `Biomes16` de 256 octets (nom de NGClient). Ce tableau est créé dès qu'un biome dépasse 255 et n'est sauvegardé que s'il sert ; le `level.dat` reçoit alors `NGBlockIdFormat=5`. Une colonne encore à calculer vaut 255 sans `Biomes16` et 65 535 avec, comme dans NGClient. Un biome dont l'ID n'est plus enregistré se lit comme des plaines, comme en vanilla.
+
+- Génération : les générateurs (vanilla, mods, Bukkit) n'écrivent que l'octet bas. Juste après la génération d'un chunk, DeltaAgent complète `Biomes16` à partir de la source de biomes du monde, partout où son biome a le même octet bas. Rien ne change tant qu'aucun biome au-delà de 255 n'est enregistré.
+- Bukkit : `World.setBiome()` écrit l'ID complet.
+- Réseau : le bloc `NGBI` de Packet56 porte `Biomes16`, et un Packet51 de chunk entier part en Packet56 quand le chunk en a.
 
 ### Objets au-delà de 31 999
 
@@ -196,7 +210,7 @@ DeltaAgent arrête le serveur (code de sortie 42) plutôt que de tourner à moit
 
 - au démarrage, si `mcpc-java17-agent.jar`, `ngheight-agent.jar` ou `DeltaHeight.jar` est aussi chargé ;
 - au démarrage, si le module de hauteur est désactivé (`-Ddeltaagent.height=false`) alors que la map a été sauvegardée avec la hauteur étendue. La vérification lit les fichiers `region` de la map (`level-name` de `server.properties`), de ses dimensions et des autres dossiers du serveur qui contiennent un `level.dat` ; elle s'arrête au premier chunk marqué ;
-- au chargement d'un monde dont le `level.dat` déclare un format d'IDs que le serveur ne sait pas lire : `NGBlockIdFormat` supérieur à 3, `NGItemIdFormat` supérieur à 1, ou l'un des deux avec `-Ddeltaagent.ids=false` ;
+- au chargement d'un monde dont le `level.dat` déclare un format d'IDs que le serveur ne sait pas lire : `NGBlockIdFormat` supérieur à 5, `NGItemIdFormat` supérieur à 1, ou l'un des deux avec `-Ddeltaagent.ids=false` ;
 - si une modification importante échoue (stockage, sauvegarde, protocole, registres) ou si `Chunk` n'a pas été remplacée.
 
 ## Options
@@ -222,7 +236,7 @@ Il faut un JDK 17. Le build ne télécharge rien d'autre que Gradle et ses dépe
 ./gradlew build
 ```
 
-Le jar sort dans `build/libs/DeltaAgent.jar`, après les tests. La version (0.4.0-rc.1 par défaut) se change dans `build.gradle` ; sur un tag `vX.Y.Z`, GitHub Actions construit le jar avec la version du tag et le publie dans une release, et sur un tag `vX.Y.Z-rc.N` dans une pre-release.
+Le jar sort dans `build/libs/DeltaAgent.jar`, après les tests. La version (0.5.0-rc.1 par défaut) se change dans `build.gradle` ; sur un tag `vX.Y.Z`, GitHub Actions construit le jar avec la version du tag et le publie dans une release, et sur un tag `vX.Y.Z-rc.N` dans une pre-release.
 
 ### Classes de remplacement et classes runtime
 
@@ -255,12 +269,13 @@ src/main/java/fr/deltabuild/deltaagent/
   core/              options, journaux, sécurités, transformer de jeu
   java17/            module Java 17 (ex mcpc-java17)
   height/            module de hauteur (ex DeltaHeight), patchs des plugins
-  ids/               module d'IDs : registres, patchs (IdPatches, StoragePatches), fenêtre Forge
+  ids/               module d'IDs : registres, patchs (IdPatches, StoragePatches, BiomePatches), fenêtre Forge
 src/main/java/org/objectweb/asm/LegacyAsmApi.java   appelé par l'ASM patché servi au serveur
 src/replace/java/    classes remplacées en entier (Chunk, ExtendedBlockStorage)
 src/runtime/java/    classes chargées par le LaunchClassLoader :
                        ItemIds (objets), WorldFormats (level.dat), SectionIds (plans des sections),
-                       ChunkPackets (paquets de blocs), Snapshots, XrayIds, MapHistogram
+                       ChunkBiomes (Biomes16), ChunkPackets (paquets de blocs), Snapshots, XrayIds,
+                       MapHistogram
 src/bench/java/      bancs de comparaison avec mcpc-java17 et DeltaHeight
 tools/               Deobf et Stubs
 libs/                launchwrapper 1.8 et stubs MCPC+ (compilation seulement)

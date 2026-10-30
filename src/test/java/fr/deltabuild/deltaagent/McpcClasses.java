@@ -50,7 +50,10 @@ public final class McpcClasses {
     public static ClassLoader launchLike(final Map<String, byte[]> replaced) throws Exception {
         URL helper = McpcClasses.class.getClassLoader().getResource("fr/deltabuild/deltaagent/runtime/ItemIds.class");
         String root = helper.toString().substring(0, helper.toString().length() - "fr/deltabuild/deltaagent/runtime/ItemIds.class".length());
-        URL[] urls = {jar().toURI().toURL(), new URL(root)};
+        // The server jar beside it brings the libraries (Trove, Guava) the game classes use.
+        File server = new File(jar().getParentFile(), "minecraft_server.jar");
+        URL[] urls = server.isFile() ? new URL[] {jar().toURI().toURL(), new URL(root), server.toURI().toURL()}
+                : new URL[] {jar().toURI().toURL(), new URL(root)};
         return new URLClassLoader(urls, McpcClasses.class.getClassLoader()) {
             @Override
             protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {

@@ -28,16 +28,18 @@ import net.minecraft.tileentity.TileEntity;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldServer;
 import net.minecraft.world.chunk.Chunk;
+import net.minecraft.world.chunk.NibbleArray;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
 /**
- * Block IDs above 4095 on the wire, the NGClient way. Only Packet56 carries the upper planes, in
- * five blocks after the vanilla data of each chunk. Any other packet that cannot carry an ID is
- * turned into one that can, just before it is sent:
+ * Block IDs above 4095 and metadata above 15 on the wire, the NGClient way. Only Packet56 carries
+ * the upper planes, in five blocks after the vanilla data of each chunk. Any other packet that
+ * cannot carry its block is turned into one that can, just before it is sent:
  * <ul>
- * <li>Packet53 above 65535: Packet56 of the chunk;</li>
- * <li>Packet52 above 4095: one Packet53 per block, or Packet56 above 65535;</li>
- * <li>Packet51 of sections with Add2 or BlocksB3: Packet56, since NGClient clears those planes.</li>
+ * <li>Packet53 (ID on 16 bits, meta on 8): Packet56 of the chunk beyond;</li>
+ * <li>Packet52 (ID on 12 bits, meta on 4): one Packet53 per block, or Packet56 beyond Packet53;</li>
+ * <li>Packet51 of sections with upper ID or metadata planes: Packet56, since NGClient clears the
+ * ID planes and keeps stale metadata planes; the same for a whole chunk with Biomes16.</li>
  * </ul>
  * A Packet56 rebuilds the chunk on the client, so its tile entities and entities are sent again
  * right after. While PlayerInstance flushes a chunk, it is sent whole at most once per player.
@@ -46,8 +48,8 @@ public final class ChunkPackets {
 
     static final int WATERLOG = 0x4E47574C; // NGWL
     static final int IDS = 0x4E474944; // NGID, Add2
-    static final int META = 0x4E474D44; // NGMD, meta bits 4-15 (step 4)
-    static final int BIOME = 0x4E474249; // NGBI, biome bits 8-15 (step 4)
+    static final int META = 0x4E474D44; // NGMD, meta bits 4-7 then 8-15
+    static final int BIOME = 0x4E474249; // NGBI, biome bits 8-15
     static final int B3 = 0x4E474233; // NGB3, BlocksB3
     static final int VERSION = 1;
     /** Decompressed bytes NGClient makes room for, per chunk of a batch. */
@@ -89,6 +91,7 @@ public final class ChunkPackets {
 
     static byte[] withNgBlocks(byte[] vanilla, int mask, ExtendedBlockStorage[] sections, Chunk chunk) {
         int add2Mask = 0;
+        int metaMask = 0;
         int b3Mask = 0;
         for (int i = 0; i < sections.length && i < 24; i++) {
             ExtendedBlockStorage section = sections[i];
@@ -98,11 +101,16 @@ public final class ChunkPackets {
             if (section.getBlockA2Array() != null) {
                 add2Mask |= 1 << i;
             }
+            if (hasMeta(section)) {
+                metaMask |= 1 << i;
+            }
             if (section.getBlockB3Array() != null) {
                 b3Mask |= 1 << i;
             }
         }
-        int size = vanilla.length + EMPTY_BLOCKS + Integer.bitCount(add2Mask) * 2048 + Integer.bitCount(b3Mask) * 4096;
+        byte[] biomes = chunk == null ? null : ChunkBiomes.useful(chunk.deltaBiomeHigh);
+        int size = vanilla.length + EMPTY_BLOCKS + Integer.bitCount(add2Mask) * 2048 + Integer.bitCount(metaMask) * 6144
+                + (biomes == null ? 0 : 256) + Integer.bitCount(b3Mask) * 4096;
         byte[] out = Arrays.copyOf(vanilla, size);
         int p = header(out, vanilla.length, WATERLOG, 0);
         p = header(out, p, IDS, add2Mask);
@@ -111,10 +119,27 @@ public final class ChunkPackets {
                 p = sections[i].getBlockA2Array().copyToByteArray(out, p);
             }
         }
-        p = header(out, p, META, 0);
+        p = header(out, p, META, metaMask);
+        for (int i = 0; i < 24; i++) {
+            if ((metaMask & 1 << i) != 0) {
+                NibbleArray high = sections[i].getMetaHighArray();
+                if (high != null) {
+                    high.copyToByteArray(out, p);
+                }
+                byte[] data2 = sections[i].getMeta2Array();
+                if (data2 != null) {
+                    System.arraycopy(data2, 0, out, p + 2048, 4096);
+                }
+                p += 6144; // a missing plane stays at zero
+            }
+        }
         p = putInt(out, p, BIOME);
         out[p++] = VERSION;
-        out[p++] = 0; // no biome plane
+        out[p++] = (byte) (biomes == null ? 0 : 1);
+        if (biomes != null) {
+            System.arraycopy(biomes, 0, out, p, 256);
+            p += 256;
+        }
         p = header(out, p, B3, b3Mask);
         for (int i = 0; i < 24; i++) {
             if ((b3Mask & 1 << i) != 0) {
@@ -130,6 +155,25 @@ public final class ChunkPackets {
                     + " bytes once decompressed, over the " + CLIENT_LIMIT + " NGClient allows per chunk: it may refuse it.");
         }
         return out;
+    }
+
+    /** Whether a metadata plane of the section holds anything. */
+    static boolean hasMeta(ExtendedBlockStorage section) {
+        NibbleArray high = section.getMetaHighArray();
+        if (high != null && !(high.isTrivialArray() && high.getTrivialArrayValue() == 0) && !zero(high.getValueArray())) {
+            return true;
+        }
+        byte[] data2 = section.getMeta2Array();
+        return data2 != null && !zero(data2);
+    }
+
+    private static boolean zero(byte[] bytes) {
+        for (byte b : bytes) {
+            if (b != 0) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static int header(byte[] out, int p, int magic, int mask) {
@@ -164,7 +208,7 @@ public final class ChunkPackets {
         try {
             if (packet instanceof Packet53BlockChange) {
                 Packet53BlockChange change = (Packet53BlockChange) packet;
-                if (change.field_73421_d > 0xFFFF) {
+                if (change.field_73421_d > 0xFFFF || change.field_73422_e > 0xFF) {
                     return wholeChunk(handler, change.field_73425_a >> 4, change.field_73424_c >> 4, packet);
                 }
             } else if (packet instanceof Packet52MultiBlockChange) {
@@ -173,7 +217,8 @@ public final class ChunkPackets {
                 Packet51MapChunk map = (Packet51MapChunk) packet;
                 if (map.field_73600_c != 0) {
                     Chunk chunk = loadedChunk(world(handler), map.field_73601_a, map.field_73599_b);
-                    if (chunk != null && hasWidePlanes(chunk, map.field_73600_c)) {
+                    if (chunk != null && (hasWidePlanes(chunk, map.field_73600_c)
+                            || map.field_73598_e && ChunkBiomes.useful(chunk.deltaBiomeHigh) != null)) {
                         return wholeChunk(handler, map.field_73601_a, map.field_73599_b, packet);
                     }
                 }
@@ -224,16 +269,20 @@ public final class ChunkPackets {
         boolean wide = false;
         for (int i = 0; i < count; i++) {
             int position = (records[i * 4] & 0xFF) << 8 | records[i * 4 + 1] & 0xFF;
-            int id = chunk.func_76610_a(position >> 12 & 15, position & 255, position >> 8 & 15);
-            if (id > 0xFFFF) {
+            int x = position >> 12 & 15;
+            int y = position & 255;
+            int z = position >> 8 & 15;
+            int id = chunk.func_76610_a(x, y, z);
+            int meta = chunk.func_76628_c(x, y, z);
+            if (id > 0xFFFF || meta > 0xFF) {
                 return wholeChunk(handler, packet.field_73452_a, packet.field_73450_b, packet);
             }
-            wide |= id > 0xFFF;
+            wide |= id > 0xFFF || meta > 15;
         }
         if (!wide) {
             return packet;
         }
-        // IDs of 16 bits: one Packet53 per block, which NGClient reads on 16 bits.
+        // One Packet53 per block, which NGClient reads with a 16-bit ID and an 8-bit meta.
         Packet first = null;
         List<Object> rest = new ArrayList<Object>();
         for (int i = 0; i < count; i++) {
@@ -363,11 +412,11 @@ public final class ChunkPackets {
         return world.func_72964_e(chunkX, chunkZ);
     }
 
-    /** Whether one of the sections of the mask stores IDs above 4095. */
+    /** Whether one of the sections of the mask has upper ID or metadata planes. */
     static boolean hasWidePlanes(Chunk chunk, int mask) {
         ExtendedBlockStorage[] sections = chunk.func_76587_i();
         for (int i = 0; i < sections.length && i < 24; i++) {
-            if ((mask & 1 << i) != 0 && sections[i] != null && sections[i].deltaHasWidePlanes()) {
+            if ((mask & 1 << i) != 0 && sections[i] != null && (sections[i].deltaHasWidePlanes() || sections[i].deltaHasWideMeta())) {
                 return true;
             }
         }

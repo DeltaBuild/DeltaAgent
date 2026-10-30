@@ -4,9 +4,10 @@ import net.minecraft.block.Block;
 import net.minecraft.world.chunk.NibbleArray;
 
 /**
- * Chunk section of MCPC+ 1.6.4 (build 164-251) with 24-bit block IDs, as NGClient stores them:
- * Blocks (bits 0-7), Add (8-11), Add2 (12-15) and BlocksB3 (16-23). Add2 and BlocksB3 exist only
- * once a block needs them. Everything else is MCPC+'s section, Spigot's trivial nibble arrays
+ * Chunk section of MCPC+ 1.6.4 (build 164-251) with 24-bit block IDs and 16-bit metadata, as
+ * NGClient stores them: Blocks (bits 0-7), Add (8-11), Add2 (12-15) and BlocksB3 (16-23) for the
+ * IDs, Data (bits 0-3), meta high (4-7) and Data2 (8-15) for the metadata. The upper planes exist
+ * only once a block needs them. Everything else is MCPC+'s section, Spigot's trivial nibble arrays
  * included. Shipped by the ids module (DeltaAgent).
  */
 public class ExtendedBlockStorage {
@@ -22,6 +23,9 @@ public class ExtendedBlockStorage {
     // Bits 12-15 and 16-23 of the block IDs, null while unused. Names of NGClient.
     private NibbleArray blockA2Array;
     private byte[] blockB3Array;
+    // Bits 4-7 and 8-15 of the metadata, null while unused. Names of NGClient.
+    private NibbleArray metaHighArray;
+    private byte[] meta2Array;
 
     public ExtendedBlockStorage(int par1, boolean par2) {
         this.field_76684_a = par1;
@@ -118,12 +122,41 @@ public class ExtendedBlockStorage {
         }
     }
 
+    /** Metadata at section coordinates, 0 to 65535. */
     public int func_76665_b(int par1, int par2, int par3) {
-        return this.field_76678_f.func_76582_a(par1, par2, par3);
+        int meta = this.field_76678_f.func_76582_a(par1, par2, par3);
+        if (this.metaHighArray != null) {
+            meta |= this.metaHighArray.func_76582_a(par1, par2, par3) << 4;
+        }
+        if (this.meta2Array != null) {
+            meta |= (this.meta2Array[par2 << 8 | par3 << 4 | par1] & 0xFF) << 8;
+        }
+        return meta;
     }
 
+    /** Sets the metadata at section coordinates; a value outside 0-65535 is refused, as in NGClient. */
     public void func_76654_b(int par1, int par2, int par3, int par4) {
-        this.field_76678_f.func_76581_a(par1, par2, par3, par4);
+        if ((par4 & 0xFFFF) != par4) {
+            throw new IllegalStateException("[DeltaAgent/ids] Metadata " + par4 + " at " + par1 + "," + (this.field_76684_a + par2)
+                    + "," + par3 + " of a section is outside 0-65535.");
+        }
+        this.field_76678_f.func_76581_a(par1, par2, par3, par4 & 15);
+        if ((par4 & 0xF0) != 0) {
+            if (this.metaHighArray == null) {
+                this.metaHighArray = new NibbleArray(this.field_76680_d.length, 4);
+            }
+            this.metaHighArray.func_76581_a(par1, par2, par3, (par4 & 0xF0) >> 4);
+        } else if (this.metaHighArray != null) {
+            this.metaHighArray.func_76581_a(par1, par2, par3, 0);
+        }
+        if ((par4 & 0xFF00) != 0) {
+            if (this.meta2Array == null) {
+                this.meta2Array = new byte[this.field_76680_d.length];
+            }
+            this.meta2Array[par2 << 8 | par3 << 4 | par1] = (byte) ((par4 & 0xFF00) >> 8);
+        } else if (this.meta2Array != null) {
+            this.meta2Array[par2 << 8 | par3 << 4 | par1] = 0;
+        }
     }
 
     public boolean func_76663_a() {
@@ -399,6 +432,28 @@ public class ExtendedBlockStorage {
         this.blockB3Array = null;
     }
 
+    // Metadata bits 4-7 and 8-15, NGClient's API
+
+    public NibbleArray getMetaHighArray() {
+        return this.metaHighArray;
+    }
+
+    public void setMetaHighArray(NibbleArray par1NibbleArray) {
+        this.metaHighArray = this.validateNibbleArray(par1NibbleArray);
+    }
+
+    public byte[] getMeta2Array() {
+        return this.meta2Array;
+    }
+
+    public void setMeta2Array(byte[] par1Array) {
+        if (par1Array != null && par1Array.length != this.field_76680_d.length) {
+            throw new IllegalArgumentException("[DeltaAgent/ids] Data2 plane of " + par1Array.length + " bytes, expected "
+                    + this.field_76680_d.length + ".");
+        }
+        this.meta2Array = par1Array;
+    }
+
     // DeltaAgent
 
     /** Sets the three upper planes at once (palette sections); null clears a plane. */
@@ -406,6 +461,11 @@ public class ExtendedBlockStorage {
         this.field_76681_e = add;
         this.blockA2Array = add2;
         this.setBlockB3Array(b3);
+    }
+
+    /** Whether the meta high or Data2 plane is in use: the section may hold metadata above 15. */
+    public boolean deltaHasWideMeta() {
+        return this.metaHighArray != null || this.meta2Array != null;
     }
 
     /** Whether Add2 or BlocksB3 is in use: the section holds IDs above 4095. */

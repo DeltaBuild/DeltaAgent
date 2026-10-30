@@ -52,7 +52,13 @@ class IdPatchesMcpcTest {
             "XrayIds.narrow"});
         CALLS.put("net.minecraft.item.ItemMap", new String[] {"MapHistogram.size", "MapHistogram.slot"});
         CALLS.put("net.minecraft.world.chunk.storage.ExtendedBlockStorage", new String[0]);
-        CALLS.put("net.minecraft.world.chunk.storage.AnvilChunkLoader", new String[] {"SectionIds.read", "SectionIds.write"});
+        CALLS.put("net.minecraft.world.chunk.storage.AnvilChunkLoader", new String[] {"SectionIds.read", "SectionIds.write",
+            "ChunkBiomes.read", "ChunkBiomes.write"});
+        CALLS.put("net.minecraft.world.biome.BiomeGenBase", new String[0]);
+        CALLS.put("net.minecraftforge.common.BiomeDictionary", new String[0]);
+        CALLS.put("net.minecraft.world.chunk.Chunk", new String[] {"ChunkBiomes.biome"});
+        CALLS.put("net.minecraft.world.gen.ChunkProviderServer", new String[] {"ChunkBiomes.generated"});
+        CALLS.put("org.bukkit.craftbukkit.v1_6_R3.CraftWorld", new String[] {"ChunkBiomes.generated", "ChunkBiomes.setBukkit"});
         CALLS.put("net.minecraft.network.packet.Packet56MapChunks", new String[] {"ChunkPackets.extend"});
         CALLS.put("net.minecraft.network.NetServerHandler", new String[] {"ChunkPackets.onSend", "ChunkPackets.afterSend"});
         CALLS.put("net.minecraft.server.management.PlayerInstance", new String[] {"ChunkPackets.flushStart",
@@ -89,7 +95,7 @@ class IdPatchesMcpcTest {
         HeightModule.registerTargets(registry);
         IdsModule.start(registry);
         GameTransformer transformer = new GameTransformer(registry);
-        assertEquals(20, CALLS.size());
+        assertEquals(25, CALLS.size());
         List<String> problems = new ArrayList<String>();
         for (Map.Entry<String, String[]> entry : CALLS.entrySet()) {
             String name = entry.getKey();
@@ -157,6 +163,30 @@ class IdPatchesMcpcTest {
             }
         }
         assertTrue(missing.isEmpty(), missing.toString());
+    }
+
+    @Test
+    void biomesGetSixteenBitsOnBothChunks() throws Exception {
+        for (String name : new String[] {"net.minecraft.world.biome.BiomeGenBase", "net.minecraftforge.common.BiomeDictionary"}) {
+            ClassNode node = patched(name, name.endsWith("BiomeGenBase") ? new BiomePatches.ListSizePatch(BiomePatches.BIOME)
+                    : new BiomePatches.ListSizePatch("net/minecraftforge/common/BiomeDictionary$BiomeInfo"));
+            assertTrue(hasConstant(Asm.require(node, "<clinit>", "()V"), 65536), name);
+        }
+        // Vanilla chunk (height module off): the field is added
+        ClassNode vanilla = patched("net.minecraft.world.chunk.Chunk", new BiomePatches.ChunkPatch());
+        assertNotNull(field(vanilla, BiomePatches.HIGH_FIELD));
+        assertTrue(calls(vanilla, "ChunkBiomes.biome"));
+        new Analyzer<BasicValue>(new BasicVerifier()).analyze(vanilla.name,
+                Asm.require(vanilla, "func_76591_a", "(IILnet/minecraft/world/biome/WorldChunkManager;)Lnet/minecraft/world/biome/BiomeGenBase;"));
+    }
+
+    private static boolean hasConstant(MethodNode method, int value) {
+        for (AbstractInsnNode in = method.instructions.getFirst(); in != null; in = in.getNext()) {
+            if (Asm.isInt(in, value)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static boolean hasMethod(ClassNode node, String name, String desc) {

@@ -72,7 +72,10 @@ final class StoragePatches implements Opcodes {
 
     // Save format
 
-    /** Sections read and written with Add2, BlocksB3 and palette sections, through SectionIds. */
+    /**
+     * Sections read and written with their upper planes and palette sections, through SectionIds;
+     * the chunk's Biomes16 array, through ChunkBiomes.
+     */
     static final class AnvilChunkLoaderPatch implements ClassPatch {
         public int apply(ClassNode cn) {
             MethodNode read = Asm.require(cn, "func_75823_a",
@@ -91,6 +94,7 @@ final class StoragePatches implements Opcodes {
                 }
             }
             Asm.check(n == 1, "section recount in readChunkFromNBT");
+            n += biomeHook(read, "func_76616_a", "read", "(L" + CHUNK + ";L" + NBT + ";)V", true);
             MethodNode write = Asm.require(cn, "func_75820_a",
                     "(L" + CHUNK + ";Lnet/minecraft/world/World;L" + NBT + ";)V");
             AbstractInsnNode blocks = ldc(write, "Blocks");
@@ -104,10 +108,48 @@ final class StoragePatches implements Opcodes {
                     hook.add(new VarInsnNode(ALOAD, Asm.var(section)));
                     hook.add(IdPatches.call(SECTION_IDS, "write", "(L" + NBT + ";L" + EBS + ";)V"));
                     write.instructions.insertBefore(in, hook);
-                    return n + 1;
+                    return n + 1 + biomeHook(write, "func_76605_m", "write", "(L" + NBT + ";L" + CHUNK + ";)V", false);
                 }
             }
             throw new IllegalStateException("pattern not found: sections.appendTag(section)");
+        }
+
+        /**
+         * After the call that moves the Biomes array (read: chunk.setBiomeArray(tag.getByteArray("Biomes")),
+         * write: tag.setByteArray("Biomes", chunk.getBiomeArray())), the same for Biomes16.
+         */
+        private static int biomeHook(MethodNode m, String chunkCall, String name, String desc, boolean chunkFirst) {
+            for (AbstractInsnNode in : m.instructions.toArray()) {
+                if (!Asm.isCall(in, CHUNK, chunkCall, null)) {
+                    continue;
+                }
+                AbstractInsnNode after;
+                int chunk;
+                int tag;
+                if (chunkFirst) {
+                    // ALOAD chunk; ALOAD tag; LDC "Biomes"; getByteArray; setBiomeArray
+                    AbstractInsnNode ldc = Asm.prev(Asm.prev(in));
+                    Asm.check(ldc instanceof LdcInsnNode && "Biomes".equals(((LdcInsnNode) ldc).cst), "\"Biomes\" read");
+                    tag = Asm.var(Asm.prev(ldc));
+                    chunk = Asm.var(Asm.prev(Asm.prev(ldc)));
+                    after = in;
+                } else {
+                    // ALOAD tag; LDC "Biomes"; ALOAD chunk; getBiomeArray; setByteArray
+                    AbstractInsnNode ldc = Asm.prev(Asm.prev(in));
+                    Asm.check(ldc instanceof LdcInsnNode && "Biomes".equals(((LdcInsnNode) ldc).cst), "\"Biomes\" write");
+                    chunk = Asm.var(Asm.prev(in));
+                    tag = Asm.var(Asm.prev(ldc));
+                    after = Asm.next(in);
+                    Asm.check(Asm.isCall(after, NBT, "func_74773_a", null), "setByteArray(\"Biomes\")");
+                }
+                InsnList hook = new InsnList();
+                hook.add(new VarInsnNode(ALOAD, chunkFirst ? chunk : tag));
+                hook.add(new VarInsnNode(ALOAD, chunkFirst ? tag : chunk));
+                hook.add(IdPatches.call(BiomePatches.CHUNK_BIOMES, name, desc));
+                m.instructions.insert(after, hook);
+                return 1;
+            }
+            throw new IllegalStateException("pattern not found: Chunk." + chunkCall);
         }
     }
 
