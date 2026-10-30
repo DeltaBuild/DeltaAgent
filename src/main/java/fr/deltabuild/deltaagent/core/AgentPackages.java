@@ -14,7 +14,7 @@ public final class AgentPackages {
     private static final String ROOT_INTERNAL = "fr/deltabuild/deltaagent/";
 
     /*
-     * Everything but a future "runtime" package: code called by patched game classes that has to
+     * Everything but the "runtime" package: code called by patched game classes that has to
      * see those classes must be defined by the LaunchClassLoader itself.
      */
     private static final List<String> EXCLUDED = Collections.unmodifiableList(Arrays.asList(

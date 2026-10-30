@@ -40,11 +40,11 @@ import org.objectweb.asm.tree.TypeInsnNode;
 
 /**
  * Builds libs/mcpc-stubs.jar: signatures only (no code) of the MCPC+ classes and members used by
- * the replacement classes of src/replace/java. The project then compiles without the server jar,
- * on GitHub Actions too. Run by {@code gradlew mcpcStubs}, again whenever a replacement class uses
- * a new MCPC+ class or member.
+ * the replacement classes of src/replace/java and the runtime helpers of src/runtime/java. The
+ * project then compiles without the server jar, on GitHub Actions too. Run by
+ * {@code gradlew mcpcStubs}, again whenever one of them uses a new MCPC+ class or member.
  *
- * <p>Arguments: output jar, folder of the compiled replacement classes, MCPC+ jars (SRG names first).
+ * <p>Arguments: output jar, folder of those classes compiled, MCPC+ jars (SRG names first).
  */
 public class Stubs {
 
@@ -118,7 +118,7 @@ public class Stubs {
                 out.closeEntry();
             }
         }
-        System.out.println("Stubs: " + needed.size() + " classes for " + own.size() + " replacement classes -> " + args[0]);
+        System.out.println("Stubs: " + needed.size() + " classes for " + own.size() + " agent classes -> " + args[0]);
     }
 
     /** Every type and member a replacement class refers to. */

@@ -21,14 +21,19 @@ plugins {
 
 group = 'fr.deltabuild'
 // Replaced by the tag version when GitHub Actions builds a release (-PreleaseVersion=...).
-version = findProperty('releaseVersion') ?: '0.2.0'
+version = findProperty('releaseVersion') ?: '0.4.0-rc.1'
 
 def asmVersion = '9.7'
 
 sourceSets {
-    // Game classes replaced whole (Chunk), compiled against MCPC+ stubs.
+    // Game classes replaced whole (Chunk, ExtendedBlockStorage), compiled against MCPC+ stubs.
     replace {
         java { srcDirs = ['src/replace/java'] }
+    }
+    // Helpers called by patched game classes and defined by the LaunchClassLoader, compiled against
+    // MCPC+ stubs (package fr.deltabuild.deltaagent.runtime).
+    runtime {
+        java { srcDirs = ['src/runtime/java'] }
     }
     // Tools to regenerate libs/mcpc-srg.jar and libs/mcpc-stubs.jar.
     tools {
@@ -47,6 +52,12 @@ tasks.withType(JavaCompile).configureEach {
 
 // Replacement classes run inside Minecraft 1.6.4: Java 8 source, turned into Java 6 bytecode below.
 tasks.named('compileReplaceJava') {
+    options.release = 8
+    options.compilerArgs += ['-Xlint:-options']
+}
+
+// Runtime helpers too run inside Minecraft 1.6.4: Java 8 bytecode, like the mods of that time.
+tasks.named('compileRuntimeJava') {
     options.release = 8
     options.compilerArgs += ['-Xlint:-options']
 }
@@ -84,6 +95,14 @@ dependencies {
     testImplementation files('libs/launchwrapper-1.8.jar')
 
     replaceCompileOnly files('libs/mcpc-stubs.jar')
+    runtimeCompileOnly files('libs/mcpc-stubs.jar')
+    // Log, Safety and the ids module: shared with the agent through the LaunchClassLoader exclusions.
+    runtimeCompileOnly sourceSets.main.output
+    // The replaced ExtendedBlockStorage, with its Add2 and BlocksB3 planes.
+    runtimeCompileOnly sourceSets.replace.output
+
+    testRuntimeOnly sourceSets.runtime.output
+    testImplementation "org.ow2.asm:asm-analysis:${asmVersion}"
 
     toolsImplementation "org.ow2.asm:asm:${asmVersion}"
     toolsImplementation "org.ow2.asm:asm-tree:${asmVersion}"
@@ -341,9 +360,10 @@ def relocate = tasks.register('relocateAgent') {
 
 /*
  * Replacement classes as Java 6 bytecode (class version 50), like the rest of MCPC+: the coremods
- * of that time expect it, and so do the placeholder ID patches, which skip newer classes. Shipped
- * as fr/deltabuild/deltaagent/height/<Name>.class.bin.
+ * of that time expect it. Shipped as fr/deltabuild/deltaagent/<module>/<Name>.class.bin, next to
+ * the module that installs them.
  */
+def replaceModules = ['Chunk.class': 'height', 'ExtendedBlockStorage.class': 'ids']
 def replaceClassesDirs = sourceSets.replace.output.classesDirs
 def replaceBinDir = layout.buildDirectory.dir('replace-bin')
 def replaceBin = tasks.register('replaceBin') {
@@ -360,7 +380,11 @@ def replaceBin = tasks.register('replaceBin') {
                         byte[] bytes = f.bytes
                         bytes[6] = 0
                         bytes[7] = 50
-                        def target = new File(out, 'fr/deltabuild/deltaagent/height/' + f.name + '.bin')
+                        def module = replaceModules[f.name]
+                        if (module == null) {
+                            throw new GradleException("No module ships ${f.name}: add it to replaceModules")
+                        }
+                        def target = new File(out, "fr/deltabuild/deltaagent/${module}/${f.name}.bin")
                         target.parentFile.mkdirs()
                         target.bytes = bytes
                     }
@@ -370,10 +394,12 @@ def replaceBin = tasks.register('replaceBin') {
     }
 }
 
-// Tests read the replacement Chunk as the agent does.
+// Tests read the replacement classes as the agent does. Tests on real MCPC+ classes run only when
+// libs/mcpc-srg.jar is there (not published).
 test {
     dependsOn replaceBin
     classpath += files(replaceBinDir)
+    systemProperty 'deltaagent.test.mcpcSrg', file('libs/mcpc-srg.jar').absolutePath
 }
 
 // MCPC+ jars, not published: only needed to regenerate the stubs (see tools/Deobf.java).
@@ -400,10 +426,11 @@ tasks.register('mcpcSrg', JavaExec) {
     }
 }
 
-// The replacement classes compiled against the real MCPC+ jars, to find what the stubs need.
+// The replacement classes and runtime helpers compiled against the real MCPC+ jars, to find what the
+// stubs need.
 def compileReplaceMcpc = tasks.register('compileReplaceMcpc', JavaCompile) {
-    source = sourceSets.replace.java
-    classpath = mcpcJars
+    source = sourceSets.replace.java + sourceSets.runtime.java
+    classpath = mcpcJars + sourceSets.main.output
     destinationDirectory = layout.buildDirectory.dir('replace-mcpc')
     options.release = 8
     options.compilerArgs += ['-Xlint:-options']
@@ -441,6 +468,7 @@ def agentJar = tasks.register('agentJar', Jar) {
     }
     from(tasks.named('processResources'))
     from(replaceBin)
+    from(sourceSets.runtime.output)
     from('LICENSE') { into 'META-INF' }
     from('licenses') { into 'META-INF/licenses' }
     manifest {
@@ -461,13 +489,13 @@ tasks.named('assemble') {
 }
 
 /*
- * Step 0 bench: runs the class patches of mcpc-java17 and of DeltaAgent on the same classes and
- * fails on any difference. Needs libs/mcpc-java17-agent.jar and libs/mcpc-srg.jar (not published);
+ * Java 17 bench: runs the sun.reflect patches of mcpc-java17 and of DeltaAgent on the same classes,
+ * compares the patched ASM and Launch, and fails on any difference. Needs libs/mcpc-java17-agent.jar and libs/mcpc-srg.jar (not published);
  * more jars to scan (mods, plugins) can be given with -PbenchJars=a.jar,b.jar.
  */
 tasks.register('compareMcpcJava17', JavaExec) {
     group = 'verification'
-    description = 'Compares DeltaAgent with mcpc-java17 on real classes'
+    description = 'Compares the java17 module with mcpc-java17 on real classes'
     dependsOn agentJar
     classpath = sourceSets.bench.runtimeClasspath
     mainClass = 'fr.deltabuild.deltaagent.bench.CompareMcpcJava17'

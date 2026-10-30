@@ -10,7 +10,7 @@ class AgentPackagesTest {
     @Test
     void launchClassLoaderLeavesAgentClassesToTheApplicationLoader() {
         assertTrue(excluded("fr.deltabuild.deltaagent.DeltaAgent"));
-        assertTrue(excluded("fr.deltabuild.deltaagent.ids.legacy.IdCapacity"));
+        assertTrue(excluded("fr.deltabuild.deltaagent.ids.Registries"));
         assertTrue(excluded("fr.deltabuild.deltaagent.java17.shim.ReflectionFactory"));
         assertTrue(excluded("fr.deltabuild.deltaagent.shadow.asm.ClassReader"));
     }

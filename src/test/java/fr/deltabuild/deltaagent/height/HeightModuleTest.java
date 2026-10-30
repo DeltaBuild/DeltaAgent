@@ -35,8 +35,8 @@ class HeightModuleTest {
         assertEquals(33, registry.size()); // 32 from DeltaHeight + AntiXray
         assertNotNull(registry.get("net.minecraft.world.chunk.Chunk"));
         assertNotNull(registry.get("org.spigotmc.AntiXray"));
-        assertFalse(registry.get("org.spigotmc.AntiXray").critical());
-        assertTrue(registry.get("net.minecraft.server.management.PlayerInstance").critical());
+        assertFalse(registry.get("org.spigotmc.AntiXray").get(0).critical());
+        assertTrue(registry.get("net.minecraft.server.management.PlayerInstance").get(0).critical());
     }
 
     @Test
