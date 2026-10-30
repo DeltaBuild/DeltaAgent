@@ -6,8 +6,8 @@ import fr.deltabuild.deltaagent.core.PatchRegistry;
 
 /**
  * Block and item IDs up to 2^24, as NationsGlory has them: registries that grow on demand, item IDs
- * above 31999 saved and sent with an "idExt" int, chunk sections that store 24-bit block IDs and
- * send them to NGClient.
+ * above 31999 saved and sent with an "idExt" int, chunks that store 24-bit block IDs, 16-bit
+ * metadata and 16-bit biomes and send them to NGClient.
  */
 public final class IdsModule {
 
@@ -53,10 +53,11 @@ public final class IdsModule {
         }
         IdPatches.register(registry);
         StoragePatches.register(registry);
+        BiomePatches.register(registry);
         registry.addLoaderCheck(IdsModule::leaveOutOnNationsGloryServers);
         active = true;
         Log.info("ids", "Block and item registries start at " + capacity + " IDs and grow up to " + IdCapacity.LIMIT
-                + ". Chunks store 24-bit block IDs (Add2, BlocksB3), items above 31999 use idExt.");
+                + ". Chunks store 24-bit block IDs (Add2, BlocksB3), 16-bit metadata (DataAdd, Data2) and 16-bit biomes (Biomes16), items above 31999 use idExt.");
     }
 
     /** Module off: vanilla limits, but worlds that need it are still refused. */
@@ -85,9 +86,9 @@ public final class IdsModule {
         return forget;
     }
 
-    /** Highest NGBlockIdFormat this server can load: 3 is Add2, palette sections and BlocksB3. */
+    /** Highest NGBlockIdFormat this server can load: 3 is Add2, palette sections and BlocksB3, 4 adds 16-bit metadata, 5 16-bit biomes. */
     public static int blockFormat() {
-        return active ? 3 : 0;
+        return active ? 5 : 0;
     }
 
     private IdsModule() {

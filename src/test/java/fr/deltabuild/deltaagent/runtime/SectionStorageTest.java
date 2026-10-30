@@ -7,12 +7,19 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import fr.deltabuild.deltaagent.McpcClasses;
+import fr.deltabuild.deltaagent.core.GameTransformer;
+import fr.deltabuild.deltaagent.core.PatchRegistry;
+import fr.deltabuild.deltaagent.height.HeightModule;
+import fr.deltabuild.deltaagent.ids.IdsModule;
+import java.lang.reflect.Field;
 import java.lang.reflect.Array;
 import java.util.Arrays;
-import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIf;
@@ -27,6 +34,8 @@ class SectionStorageTest {
     private static final String EBS = "net.minecraft.world.chunk.storage.ExtendedBlockStorage";
     /** IDs on every plane boundary, up to the 24-bit maximum. */
     private static final int[] IDS = {0, 1, 255, 256, 4095, 4096, 40000, 65535, 65536, 70000, 80021, 131071, 0xFFFFFF};
+    /** Metadata on every plane boundary, up to 16 bits. */
+    private static final int[] METAS = {0, 1, 15, 16, 255, 256, 4095, 40000, 65535};
 
     private Class<?> section;
     private Class<?> nibble;
@@ -35,10 +44,20 @@ class SectionStorageTest {
     private Class<?> sectionIds;
     private Class<?> chunkPackets;
     private Class<?> snapshots;
+    private Class<?> chunkClass;
+    private Class<?> chunkBiomes;
 
     @BeforeEach
     void setUp() throws Exception {
-        ClassLoader loader = McpcClasses.launchLike(Collections.singletonMap(EBS, McpcClasses.replacement("ids/ExtendedBlockStorage")));
+        // The chunk as the server gets it: height replacement, then the ids patches (Biomes16).
+        PatchRegistry registry = new PatchRegistry();
+        HeightModule.registerTargets(registry);
+        IdsModule.start(registry);
+        String chunkName = "net.minecraft.world.chunk.Chunk";
+        Map<String, byte[]> replaced = new HashMap<String, byte[]>();
+        replaced.put(EBS, McpcClasses.replacement("ids/ExtendedBlockStorage"));
+        replaced.put(chunkName, new GameTransformer(registry).transform(chunkName, chunkName, McpcClasses.read(chunkName.replace('.', '/'))));
+        ClassLoader loader = McpcClasses.launchLike(replaced);
         section = loader.loadClass(EBS);
         nibble = loader.loadClass("net.minecraft.world.chunk.NibbleArray");
         nbt = loader.loadClass("net.minecraft.nbt.NBTTagCompound");
@@ -46,6 +65,8 @@ class SectionStorageTest {
         sectionIds = loader.loadClass("fr.deltabuild.deltaagent.runtime.SectionIds");
         chunkPackets = loader.loadClass("fr.deltabuild.deltaagent.runtime.ChunkPackets");
         snapshots = loader.loadClass("fr.deltabuild.deltaagent.runtime.Snapshots");
+        chunkClass = loader.loadClass(chunkName);
+        chunkBiomes = loader.loadClass("fr.deltabuild.deltaagent.runtime.ChunkBiomes");
     }
 
     @Test
@@ -139,6 +160,94 @@ class SectionStorageTest {
     }
 
     @Test
+    void metadataUsesThreePlanes() throws Exception {
+        Object storage = newSection();
+        for (int i = 0; i < METAS.length; i++) {
+            call(section, "func_76654_b", storage, x(i), y(i), z(i), METAS[i]);
+        }
+        for (int i = 0; i < METAS.length; i++) {
+            assertEquals(METAS[i], call(section, "func_76665_b", storage, x(i), y(i), z(i)), "meta " + METAS[i]);
+        }
+        assertTrue((Boolean) call(section, "deltaHasWideMeta", storage));
+        call(section, "func_76654_b", storage, x(8), y(8), z(8), 3); // 65535 becomes 3: upper planes cleared there
+        assertEquals(3, call(section, "func_76665_b", storage, x(8), y(8), z(8)));
+        assertFalse((Boolean) call(section, "deltaHasWideMeta", newSection()));
+        for (int bad : new int[] {65536, -1}) {
+            Exception e = assertThrows(IllegalStateException.class, () -> call(section, "func_76654_b", storage, 1, 2, 3, bad));
+            assertTrue(e.getMessage().contains("outside 0-65535"), e.getMessage());
+        }
+    }
+
+    @Test
+    void savedMetadataComesBack() throws Exception {
+        Object storage = newSection();
+        for (int i = 0; i < METAS.length; i++) {
+            call(section, "func_76654_b", storage, x(i), y(i), z(i), METAS[i]);
+        }
+        Object tag = save(storage);
+        assertEquals(2048, ((byte[]) call(nbt, "func_74770_j", tag, "DataAdd")).length);
+        assertEquals(4096, ((byte[]) call(nbt, "func_74770_j", tag, "Data2")).length);
+        Object loaded = load(tag);
+        for (int i = 0; i < METAS.length; i++) {
+            assertEquals(METAS[i], call(section, "func_76665_b", loaded, x(i), y(i), z(i)), "meta " + METAS[i]);
+        }
+        assertEquals(4, call(sectionIds, "format"));
+
+        Object small = newSection();
+        call(section, "func_76654_b", small, 0, 0, 0, 200); // then back to a vanilla value
+        call(section, "func_76654_b", small, 0, 0, 0, 7);
+        Object plain = save(small);
+        assertFalse((Boolean) call(nbt, "func_74764_b", plain, "DataAdd"));
+        assertFalse((Boolean) call(nbt, "func_74764_b", plain, "Data2"));
+    }
+
+    @Test
+    void biomesUseSixteenBits() throws Exception {
+        Object chunk = chunk(1, 2);
+        byte[] low = (byte[]) chunkClass.getField("field_76651_r").get(chunk);
+        Arrays.fill(low, (byte) 0xFF); // every column still to compute
+        call(chunkBiomes, "set", chunk, 5, 300);
+        call(chunkBiomes, "set", chunk, 7, 12);
+        call(chunkBiomes, "set", chunk, 8, 65534);
+        assertEquals(300, call(chunkBiomes, "id", chunk, 5, 0));
+        assertEquals(12, call(chunkBiomes, "id", chunk, 7, 0));
+        assertEquals(65534, call(chunkBiomes, "id", chunk, 8, 0));
+        assertEquals(65535, call(chunkBiomes, "id", chunk, 6, 0), "a column to compute stays to compute");
+
+        Object level = create(nbt);
+        call(chunkBiomes, "write", level, chunk);
+        assertEquals(256, ((byte[]) call(nbt, "func_74770_j", level, "Biomes16")).length);
+        Object loaded = chunk(1, 2);
+        chunkClass.getField("field_76651_r").set(loaded, low.clone());
+        call(chunkBiomes, "read", loaded, level);
+        assertEquals(300, call(chunkBiomes, "id", loaded, 5, 0));
+        assertEquals(5, call(sectionIds, "format"));
+
+        Object plain = chunk(0, 0);
+        call(chunkBiomes, "set", plain, 3, 300);
+        call(chunkBiomes, "set", plain, 3, 4); // back below 256: Biomes16 holds only zeros
+        Object none = create(nbt);
+        call(chunkBiomes, "write", none, plain);
+        assertFalse((Boolean) call(nbt, "func_74764_b", none, "Biomes16"));
+        call(chunkBiomes, "read", loaded, none);
+        assertNull(chunkClass.getField("deltaBiomeHigh").get(loaded));
+    }
+
+    @Test
+    void packet56CarriesBiomes16() throws Exception {
+        Object chunk = chunk(0, 0);
+        call(chunkBiomes, "set", chunk, 9, 300);
+        Object[] sections = (Object[]) Array.newInstance(section, 24);
+        byte[] vanilla = new byte[256];
+        byte[] data = (byte[]) call(chunkPackets, "withNgBlocks", vanilla, 0, sections, chunk);
+        NgBlocks blocks = NgBlocks.parse(data, new int[] {vanilla.length});
+        assertNotNull(blocks);
+        assertEquals(1, blocks.biome[0]);
+        assertArrayEquals((byte[]) chunkClass.getField("deltaBiomeHigh").get(chunk), blocks.plane(0, NgBlocks.BIOME, 0));
+        assertEquals(vanilla.length + 42 + 256, data.length);
+    }
+
+    @Test
     void packet56CarriesTheUpperPlanes() throws Exception {
         Object[] sections = (Object[]) Array.newInstance(section, 24);
         sections[0] = filled();
@@ -147,6 +256,8 @@ class SectionStorageTest {
         sections[6] = newSection();
         setId(sections[6], 0, 0, 0, 300); // nothing above 4095
         sections[9] = filled(); // outside the mask
+        call(section, "func_76654_b", sections[5], 7, 8, 9, 40000);
+        call(section, "func_76654_b", sections[6], 1, 1, 1, 7); // vanilla meta: no NGMD plane
         int mask = 1 | 1 << 5 | 1 << 6;
         byte[] vanilla = new byte[1234];
         Arrays.fill(vanilla, (byte) 7);
@@ -157,7 +268,12 @@ class SectionStorageTest {
         assertArrayEquals(vanilla, Arrays.copyOf(data, vanilla.length));
         assertEquals(0, blocks.waterlog[0]);
         assertEquals(1 | 1 << 5, blocks.ids[0]);
-        assertEquals(0, blocks.meta[0]);
+        assertEquals(1 << 5, blocks.meta[0]);
+        byte[] meta = blocks.plane(0, NgBlocks.META, 0);
+        int index = 8 << 8 | 9 << 4 | 7;
+        int high = meta[index >> 1] >> (index & 1) * 4 & 15;
+        assertEquals(40000 >> 4 & 15, high);
+        assertEquals(40000 >> 8 & 255, meta[2048 + index] & 0xFF);
         assertEquals(0, blocks.biome[0]);
         assertEquals(1, blocks.b3[0]);
         Object add2 = call(section, "getBlockA2Array", sections[0]);
@@ -198,6 +314,21 @@ class SectionStorageTest {
         assertEquals(0xABCDEF, call(snapshots, "typeId", value, b3, 1, -64 + 2, 3));
         assertNull(call(snapshots, "b3", new Object[] {Array.newInstance(section, 24)}));
         assertEquals(40000, call(snapshots, "typeId", (int) (short) 40000, null, 0, 0, 0));
+    }
+
+    /** A chunk without a world, enough for its biome arrays. */
+    private Object chunk(int x, int z) throws Exception {
+        Field theUnsafe = Class.forName("sun.misc.Unsafe").getDeclaredField("theUnsafe");
+        theUnsafe.setAccessible(true);
+        Object unsafe = theUnsafe.get(null);
+        Object chunk = unsafe.getClass().getMethod("allocateInstance", Class.class).invoke(unsafe, chunkClass);
+        chunkClass.getField("field_76651_r").set(chunk, new byte[256]);
+        for (String[] position : new String[][] {{"field_76635_g", "" + x}, {"field_76647_h", "" + z}}) {
+            Field field = chunkClass.getField(position[0]);
+            field.setAccessible(true);
+            field.setInt(chunk, Integer.parseInt(position[1]));
+        }
+        return chunk;
     }
 
     // Sections
@@ -275,6 +406,7 @@ class SectionStorageTest {
     private Object vanillaTag(Object storage) throws Exception {
         Object tag = create(nbt);
         call(nbt, "func_74773_a", tag, "Blocks", call(section, "func_76658_g", storage));
+        call(nbt, "func_74773_a", tag, "Data", call(nibble, "getValueArray", call(section, "func_76669_j", storage)));
         Object add = call(section, "func_76660_i", storage);
         if (add != null) {
             call(nbt, "func_74773_a", tag, "Add", call(nibble, "getValueArray", add));
@@ -292,6 +424,9 @@ class SectionStorageTest {
         Object storage = newSection();
         if ((Boolean) call(nbt, "func_74764_b", tag, "Blocks")) {
             call(section, "func_76664_a", storage, call(nbt, "func_74770_j", tag, "Blocks"));
+        }
+        if ((Boolean) call(nbt, "func_74764_b", tag, "Data")) {
+            call(section, "func_76668_b", storage, create(nibble, call(nbt, "func_74770_j", tag, "Data"), 4));
         }
         if ((Boolean) call(nbt, "func_74764_b", tag, "Add")) {
             call(section, "func_76673_a", storage, create(nibble, call(nbt, "func_74770_j", tag, "Add"), 4));
@@ -324,6 +459,8 @@ class SectionStorageTest {
 
         /** Block numbers, in their order after the vanilla data. */
         static final int IDS = 1;
+        static final int META = 2;
+        static final int BIOME = 3;
         static final int B3 = 4;
 
         private static final int[] MAGICS = {0x4E47574C, 0x4E474944, 0x4E474D44, 0x4E474249, 0x4E474233};
@@ -386,8 +523,11 @@ class SectionStorageTest {
             return p == data.length ? blocks : null;
         }
 
-        /** Payload of the nth section present in a block. */
+        /** Payload of the nth section present in a block (the chunk's biome plane for NGBI). */
         byte[] plane(int chunk, int block, int nth) {
+            if (block == BIOME) {
+                return Arrays.copyOfRange(data, starts[chunk][BIOME], starts[chunk][BIOME] + 256);
+            }
             int start = starts[chunk][block] + nth * PER_SECTION[block];
             return Arrays.copyOfRange(data, start, start + PER_SECTION[block]);
         }

@@ -67,6 +67,8 @@ public class Chunk {
     public static boolean field_76640_a;
     public ExtendedBlockStorage[] field_76652_q;
     public byte[] field_76651_r;
+    /** Bits 8-15 of the biome IDs (Biomes16), null while unused; filled by the ids module (ChunkBiomes). */
+    public byte[] deltaBiomeHigh;
     public int[] field_76638_b;
     public boolean[] field_76639_c;
     public boolean field_76636_d;
@@ -102,8 +104,9 @@ public class Chunk {
         return i >= 0 && i < s.length ? s[i] : null;
     }
 
-    // NGClient refuses a chunk over 393216 bytes once decompressed: no new BlocksB3 plane past that.
-    // The ids module replaces ExtendedBlockStorage; without it there are no IDs above 4095.
+    // NGClient refuses a chunk over 393216 bytes once decompressed: no new BlocksB3 or metadata
+    // plane past that. The ids module replaces ExtendedBlockStorage; without it there are no IDs
+    // above 4095 nor metadata above 15.
     private static final boolean DH_WIDE_IDS = dhHasWideSections();
     private static final int DH_CLIENT_LIMIT = 393216;
     private static int dhRefused;
@@ -111,39 +114,51 @@ public class Chunk {
     private static boolean dhHasWideSections() {
         try {
             ExtendedBlockStorage.class.getMethod("getBlockB3Array");
+            ExtendedBlockStorage.class.getMethod("getMeta2Array");
             return true;
         } catch (Throwable t) {
             return false;
         }
     }
 
-    /** Whether the section at y can take a BlocksB3 plane and the chunk still fit in one NGClient Packet56. */
-    private boolean dhRoomForB3(int y) {
+    /**
+     * Whether the block id:meta can go at y, given the planes it adds to its section, and the chunk
+     * still fit in one NGClient Packet56.
+     */
+    private boolean dhRoomFor(int y, int id, int meta) {
         ExtendedBlockStorage[] s = this.field_76652_q;
         int target = (y >> 4) + DH_OFFSET;
-        if (target < 0 || target >= s.length || s[target] != null && s[target].getBlockB3Array() != null) {
+        if (target < 0 || target >= s.length) {
+            return true;
+        }
+        ExtendedBlockStorage at = s[target];
+        boolean b3 = id > 0xFFFF && (at == null || at.getBlockB3Array() == null);
+        boolean metaPlanes = meta > 15 && (at == null || !at.deltaHasWideMeta());
+        if (!b3 && !metaPlanes) {
             return true;
         }
         boolean sky = !this.field_76637_e.field_73011_w.field_76576_e;
-        int bytes = 256 + 42; // biomes and empty NG blocks
+        int bytes = 256 + 42 + (this.deltaBiomeHigh != null ? 256 : 0); // biomes, empty NG blocks, Biomes16
         for (int i = 0; i < s.length; i++) {
             ExtendedBlockStorage e = s[i];
             boolean here = i == target;
             if (!here && (e == null || e.func_76663_a())) {
                 continue;
             }
+            boolean exists = e != null;
             bytes += 4096 + 2048 + 2048 + (sky ? 2048 : 0);
-            bytes += here || e.func_76660_i() != null ? 2048 : 0;
-            bytes += here || e.getBlockA2Array() != null ? 2048 : 0;
-            bytes += here || e.getBlockB3Array() != null ? 4096 : 0;
+            bytes += exists && e.func_76660_i() != null || here && id > 0xFF ? 2048 : 0;
+            bytes += exists && e.getBlockA2Array() != null || here && id > 0xFFF ? 2048 : 0;
+            bytes += exists && e.getBlockB3Array() != null || here && id > 0xFFFF ? 4096 : 0;
+            bytes += exists && e.deltaHasWideMeta() || here && meta > 15 ? 6144 : 0;
         }
         if (bytes <= DH_CLIENT_LIMIT) {
             return true;
         }
         if (++dhRefused <= 10) {
-            System.out.println("[DeltaAgent/ids] WARNING: block above 65535 refused in chunk " + this.field_76635_g + "," + this.field_76647_h
-                    + " at Y " + y + ": the chunk would weigh " + bytes + " bytes once decompressed, over the " + DH_CLIENT_LIMIT
-                    + " NGClient accepts." + (dhRefused == 10 ? " Further refusals are not logged." : ""));
+            System.out.println("[DeltaAgent/ids] WARNING: block " + id + ":" + meta + " refused in chunk " + this.field_76635_g + ","
+                    + this.field_76647_h + " at Y " + y + ": the chunk would weigh " + bytes + " bytes once decompressed, over the "
+                    + DH_CLIENT_LIMIT + " NGClient accepts." + (dhRefused == 10 ? " Further refusals are not logged." : ""));
         }
         return false;
     }
@@ -817,7 +832,7 @@ public class Chunk {
         if (l1 == par4 && i2 == par5) {
             return false;
         } else {
-            if (par4 > 0xFFFF && DH_WIDE_IDS && !this.dhRoomForB3(par2)) {
+            if ((par4 > 0xFFFF || par5 > 15) && DH_WIDE_IDS && !this.dhRoomFor(par2, par4, par5)) {
                 return false;
             }
             ExtendedBlockStorage extendedblockstorage = this.dhSectionAt(par2);
@@ -903,6 +918,9 @@ public class Chunk {
 
     // setBlockMetadata
     public boolean func_76589_b(int par1, int par2, int par3, int par4) {
+        if (par4 > 15 && DH_WIDE_IDS && !this.dhRoomFor(par2, this.func_76610_a(par1, par2, par3), par4)) {
+            return false;
+        }
         ExtendedBlockStorage extendedblockstorage = this.dhSectionAt(par2);
         if (extendedblockstorage == null) {
             return false;
@@ -1339,6 +1357,7 @@ public class Chunk {
         this.field_76652_q = dhNormalize(par1ArrayOfExtendedBlockStorage);
     }
 
+    // The ids module replaces this method with ChunkBiomes.biome, which also reads Biomes16.
     public BiomeGenBase func_76591_a(int par1, int par2, WorldChunkManager par3WorldChunkManager) {
         int k = this.field_76651_r[par2 << 4 | par1] & 255;
         if (k == 255) {

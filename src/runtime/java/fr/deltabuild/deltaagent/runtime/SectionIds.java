@@ -15,8 +15,9 @@ import net.minecraft.world.chunk.NibbleArray;
 import net.minecraft.world.chunk.storage.ExtendedBlockStorage;
 
 /**
- * The block ID planes of a saved section beyond vanilla's Blocks and Add, with NGClient's tag
- * names: Add2 (bits 12-15), BlocksB3 (bits 16-23), and the Palette sections NGClient can read.
+ * The planes of a saved section beyond vanilla's Blocks, Add and Data: block IDs in Add2 (bits
+ * 12-15) and BlocksB3 (bits 16-23), metadata in DataAdd (bits 4-7) and Data2 (bits 8-15), and the
+ * Palette sections NGClient can read.
  *
  * <p>Called by the patched AnvilChunkLoader, before the section counts its blocks.
  */
@@ -24,6 +25,9 @@ public final class SectionIds {
 
     public static final String ADD2 = "Add2";
     public static final String B3 = "BlocksB3";
+    /** Metadata bits 4-7: NG's sources name no tag for it, this name is DeltaAgent's. */
+    public static final String DATA_ADD = "DataAdd";
+    public static final String DATA2 = "Data2";
     public static final String PALETTE = "Palette";
     public static final String PALETTE_DATA = "PaletteData";
     public static final String PALETTE_BITS = "PaletteBits";
@@ -32,6 +36,7 @@ public final class SectionIds {
     public static final int FORMAT_ADD2 = 1;
     public static final int FORMAT_PALETTE = 2;
     public static final int FORMAT_B3 = 3;
+    public static final int FORMAT_META16 = 4;
 
     private static final int POSITIONS = 4096;
     private static final int LOGGED = 32;
@@ -39,8 +44,9 @@ public final class SectionIds {
     private static volatile int format;
     private static final AtomicInteger logged = new AtomicInteger();
 
-    /** A section just read: palette, or Add2 and BlocksB3 on top of Blocks and Add. */
+    /** A section just read: palette, or Add2 and BlocksB3 on top of Blocks and Add; then the metadata planes. */
     public static void read(ExtendedBlockStorage section, NBTTagCompound tag) {
+        readMeta(section, tag);
         NBTBase palette = tag.func_74781_a(PALETTE);
         if (palette instanceof NBTTagList) {
             readPalette(section, tag, (NBTTagList) palette);
@@ -66,16 +72,39 @@ public final class SectionIds {
         }
     }
 
-    /** A section about to be saved: Add2 and BlocksB3 when they hold anything. */
-    public static void write(NBTTagCompound tag, ExtendedBlockStorage section) {
-        NibbleArray add2 = section.getBlockA2Array();
-        if (add2 != null && !(add2.isTrivialArray() && add2.getTrivialArrayValue() == 0)) {
-            byte[] bytes = add2.getValueArray();
-            if (!allZero(bytes)) {
-                // A trivial array hands out a shared table: the tag gets its own copy.
-                tag.func_74773_a(ADD2, add2.isTrivialArray() ? bytes.clone() : bytes);
-                arm(FORMAT_ADD2);
+    private static void readMeta(ExtendedBlockStorage section, NBTTagCompound tag) {
+        if (tag.func_74781_a(DATA_ADD) instanceof NBTTagByteArray) {
+            byte[] high = tag.func_74770_j(DATA_ADD);
+            if (high.length == POSITIONS / 2) {
+                section.setMetaHighArray(new NibbleArray(high, 4));
+                arm(FORMAT_META16);
+            } else {
+                log("DataAdd plane of " + high.length + " bytes ignored in section y=" + section.func_76662_d() + ".");
             }
+        }
+        if (tag.func_74781_a(DATA2) instanceof NBTTagByteArray) {
+            byte[] data2 = tag.func_74770_j(DATA2);
+            if (data2.length == POSITIONS) {
+                section.setMeta2Array(data2);
+                arm(FORMAT_META16);
+            } else {
+                log("Data2 plane of " + data2.length + " bytes ignored in section y=" + section.func_76662_d() + ".");
+            }
+        }
+    }
+
+    /** A section about to be saved: Add2, BlocksB3, DataAdd and Data2 when they hold anything. */
+    public static void write(NBTTagCompound tag, ExtendedBlockStorage section) {
+        if (writeNibbles(tag, DATA_ADD, section.getMetaHighArray())) {
+            arm(FORMAT_META16);
+        }
+        byte[] data2 = section.getMeta2Array();
+        if (data2 != null && !allZero(data2)) {
+            tag.func_74773_a(DATA2, data2);
+            arm(FORMAT_META16);
+        }
+        if (writeNibbles(tag, ADD2, section.getBlockA2Array())) {
+            arm(FORMAT_ADD2);
         }
         byte[] b3 = section.getBlockB3Array();
         if (b3 != null && !allZero(b3)) {
@@ -84,12 +113,26 @@ public final class SectionIds {
         }
     }
 
+    /** Writes a nibble plane that holds anything; false if there is nothing to write. */
+    private static boolean writeNibbles(NBTTagCompound tag, String name, NibbleArray plane) {
+        if (plane == null || plane.isTrivialArray() && plane.getTrivialArrayValue() == 0) {
+            return false;
+        }
+        byte[] bytes = plane.getValueArray();
+        if (allZero(bytes)) {
+            return false;
+        }
+        // A trivial array hands out a shared table: the tag gets its own copy.
+        tag.func_74773_a(name, plane.isTrivialArray() ? bytes.clone() : bytes);
+        return true;
+    }
+
     /** Highest NGBlockIdFormat met since the start, 0 if none. */
     public static int format() {
         return format;
     }
 
-    private static void arm(int value) {
+    static void arm(int value) {
         if (value > format) {
             synchronized (SectionIds.class) {
                 if (value > format) {
@@ -238,7 +281,7 @@ public final class SectionIds {
         return true;
     }
 
-    private static void log(String message) {
+    static void log(String message) {
         int count = logged.incrementAndGet();
         if (count <= LOGGED) {
             Log.warn("ids", message + (count == LOGGED ? " Further section problems are not logged." : ""));
