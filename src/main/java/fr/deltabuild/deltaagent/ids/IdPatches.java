@@ -11,28 +11,23 @@ import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
-import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.FieldNode;
-import org.objectweb.asm.tree.FrameNode;
 import org.objectweb.asm.tree.IincInsnNode;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.InsnNode;
 import org.objectweb.asm.tree.IntInsnNode;
-import org.objectweb.asm.tree.JumpInsnNode;
-import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.objectweb.asm.tree.VarInsnNode;
 
 /**
- * Patches of the game classes for large block and item IDs. They only add straight calls to the
- * agent, except the chunk guard, which carries its own frame.
+ * Patches of the game classes for the block and item registries and for items above 31999. They
+ * only add straight calls to the agent. The 24-bit storage has its own, see {@link StoragePatches}.
  */
 final class IdPatches implements Opcodes {
 
     static final String REGISTRIES = "fr/deltabuild/deltaagent/ids/Registries";
-    static final String PLACEHOLDERS = "fr/deltabuild/deltaagent/ids/Placeholders";
     static final String WINDOW = "fr/deltabuild/deltaagent/ids/BlockWindow";
     static final String ITEM_IDS = "fr/deltabuild/deltaagent/runtime/ItemIds";
     static final String WORLD_FORMATS = "fr/deltabuild/deltaagent/runtime/WorldFormats";
@@ -66,10 +61,6 @@ final class IdPatches implements Opcodes {
         add(registry, "net.minecraft.entity.monster.EntityEnderman", false, new TrackPatch());
         add(registry, "net.minecraftforge.common.MinecraftForge", false, new EndermanSizePatch());
         add(registry, "org.spigotmc.AntiXray", false, new AntiXrayPatch());
-        add(registry, "net.minecraft.item.ItemMap", false, new ItemMapPatch());
-        // Storage: 12-bit until chunks store wider IDs
-        add(registry, "net.minecraft.world.chunk.Chunk", true, new ChunkGuardPatch());
-        add(registry, "net.minecraft.world.chunk.storage.ExtendedBlockStorage", true, new SectionGuardPatch());
         // Items above 31999: NBT, network, level.dat
         add(registry, "net.minecraft.item.ItemStack", true, new ItemStackPatch());
         add(registry, "net.minecraft.network.packet.Packet", true, new PacketPatch());
@@ -225,51 +216,6 @@ final class IdPatches implements Opcodes {
         }
     }
 
-    /** ItemMap counts the blocks of each pixel in an array as long as the registry: once per pixel. */
-    static final class ItemMapPatch implements ClassPatch {
-        public int apply(ClassNode cn) {
-            int n = replaceLength(Asm.require(cn, "func_77872_a", null), BLOCK, BLOCKS_LIST,
-                    call(PLACEHOLDERS, "mapHistogramSize", "()I"));
-            Asm.check(n == 2, "map histogram, found " + n);
-            return n;
-        }
-    }
-
-    // Storage
-
-    /** Chunk.setBlockIDWithMetadata returns false, nothing changed, for a block above 4095. */
-    static final class ChunkGuardPatch implements ClassPatch {
-        public int apply(ClassNode cn) {
-            MethodNode m = Asm.require(cn, "func_76592_a", "(IIIII)Z");
-            LabelNode storable = new LabelNode();
-            InsnList guard = new InsnList();
-            guard.add(new VarInsnNode(ILOAD, 4));
-            guard.add(call(PLACEHOLDERS, "storable", "(I)Z"));
-            guard.add(new JumpInsnNode(IFNE, storable));
-            guard.add(new InsnNode(ICONST_0));
-            guard.add(new InsnNode(IRETURN));
-            guard.add(storable);
-            if (!startsWithFrame(m)) {
-                guard.add(entryFrame(cn, m));
-            }
-            m.instructions.insert(guard);
-            return 1;
-        }
-    }
-
-    /** ExtendedBlockStorage.setExtBlockID writes air instead of a block above 4095. */
-    static final class SectionGuardPatch implements ClassPatch {
-        public int apply(ClassNode cn) {
-            MethodNode m = Asm.require(cn, "func_76655_a", "(IIII)V");
-            InsnList guard = new InsnList();
-            guard.add(new VarInsnNode(ILOAD, 4));
-            guard.add(call(PLACEHOLDERS, "storedId", "(I)I"));
-            guard.add(new VarInsnNode(ISTORE, 4));
-            m.instructions.insert(guard);
-            return 1;
-        }
-    }
-
     // Items above 31999
 
     /** NBT: "id" short 0 plus "idExt" int above 31999, as NGClient reads and writes them. */
@@ -407,7 +353,7 @@ final class IdPatches implements Opcodes {
             AbstractInsnNode next = Asm.next(in);
             if (Asm.isField(in, GETSTATIC, owner, field) && next != null && next.getOpcode() == ARRAYLENGTH) {
                 m.instructions.remove(next);
-                m.instructions.set(in, n == 0 ? value : clone(value));
+                m.instructions.set(in, n == 0 ? value : value.clone(null));
                 n++;
             }
         }
@@ -463,54 +409,6 @@ final class IdPatches implements Opcodes {
 
     static MethodInsnNode call(String owner, String name, String desc) {
         return new MethodInsnNode(INVOKESTATIC, owner, name, desc, false);
-    }
-
-    private static AbstractInsnNode clone(AbstractInsnNode node) {
-        return node.clone(null);
-    }
-
-    /** Whether a frame already describes the first instruction (a loop back to the start). */
-    private static boolean startsWithFrame(MethodNode m) {
-        for (AbstractInsnNode in = m.instructions.getFirst(); in != null && Asm.isMeta(in); in = in.getNext()) {
-            if (in instanceof FrameNode) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /** The frame at method entry: this and the arguments, empty stack (expanded form). */
-    private static FrameNode entryFrame(ClassNode cn, MethodNode m) {
-        List<Object> locals = new ArrayList<Object>();
-        if ((m.access & ACC_STATIC) == 0) {
-            locals.add(cn.name);
-        }
-        for (Type arg : Type.getArgumentTypes(m.desc)) {
-            switch (arg.getSort()) {
-                case Type.BOOLEAN:
-                case Type.BYTE:
-                case Type.CHAR:
-                case Type.SHORT:
-                case Type.INT:
-                    locals.add(INTEGER);
-                    break;
-                case Type.FLOAT:
-                    locals.add(FLOAT);
-                    break;
-                case Type.LONG:
-                    locals.add(LONG);
-                    break;
-                case Type.DOUBLE:
-                    locals.add(DOUBLE);
-                    break;
-                case Type.ARRAY:
-                    locals.add(arg.getDescriptor());
-                    break;
-                default:
-                    locals.add(arg.getInternalName());
-            }
-        }
-        return new FrameNode(F_NEW, locals.size(), locals.toArray(), 0, new Object[0]);
     }
 
     private IdPatches() {

@@ -21,12 +21,12 @@ plugins {
 
 group = 'fr.deltabuild'
 // Replaced by the tag version when GitHub Actions builds a release (-PreleaseVersion=...).
-version = findProperty('releaseVersion') ?: '0.3.0'
+version = findProperty('releaseVersion') ?: '0.4.0-rc.1'
 
 def asmVersion = '9.7'
 
 sourceSets {
-    // Game classes replaced whole (Chunk), compiled against MCPC+ stubs.
+    // Game classes replaced whole (Chunk, ExtendedBlockStorage), compiled against MCPC+ stubs.
     replace {
         java { srcDirs = ['src/replace/java'] }
     }
@@ -98,6 +98,8 @@ dependencies {
     runtimeCompileOnly files('libs/mcpc-stubs.jar')
     // Log, Safety and the ids module: shared with the agent through the LaunchClassLoader exclusions.
     runtimeCompileOnly sourceSets.main.output
+    // The replaced ExtendedBlockStorage, with its Add2 and BlocksB3 planes.
+    runtimeCompileOnly sourceSets.replace.output
 
     testRuntimeOnly sourceSets.runtime.output
     testImplementation "org.ow2.asm:asm-analysis:${asmVersion}"
@@ -358,8 +360,10 @@ def relocate = tasks.register('relocateAgent') {
 
 /*
  * Replacement classes as Java 6 bytecode (class version 50), like the rest of MCPC+: the coremods
- * of that time expect it. Shipped as fr/deltabuild/deltaagent/height/<Name>.class.bin.
+ * of that time expect it. Shipped as fr/deltabuild/deltaagent/<module>/<Name>.class.bin, next to
+ * the module that installs them.
  */
+def replaceModules = ['Chunk.class': 'height', 'ExtendedBlockStorage.class': 'ids']
 def replaceClassesDirs = sourceSets.replace.output.classesDirs
 def replaceBinDir = layout.buildDirectory.dir('replace-bin')
 def replaceBin = tasks.register('replaceBin') {
@@ -376,7 +380,11 @@ def replaceBin = tasks.register('replaceBin') {
                         byte[] bytes = f.bytes
                         bytes[6] = 0
                         bytes[7] = 50
-                        def target = new File(out, 'fr/deltabuild/deltaagent/height/' + f.name + '.bin')
+                        def module = replaceModules[f.name]
+                        if (module == null) {
+                            throw new GradleException("No module ships ${f.name}: add it to replaceModules")
+                        }
+                        def target = new File(out, "fr/deltabuild/deltaagent/${module}/${f.name}.bin")
                         target.parentFile.mkdirs()
                         target.bytes = bytes
                     }
@@ -386,7 +394,7 @@ def replaceBin = tasks.register('replaceBin') {
     }
 }
 
-// Tests read the replacement Chunk as the agent does. Tests on real MCPC+ classes run only when
+// Tests read the replacement classes as the agent does. Tests on real MCPC+ classes run only when
 // libs/mcpc-srg.jar is there (not published).
 test {
     dependsOn replaceBin

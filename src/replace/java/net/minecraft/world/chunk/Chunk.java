@@ -102,6 +102,52 @@ public class Chunk {
         return i >= 0 && i < s.length ? s[i] : null;
     }
 
+    // NGClient refuses a chunk over 393216 bytes once decompressed: no new BlocksB3 plane past that.
+    // The ids module replaces ExtendedBlockStorage; without it there are no IDs above 4095.
+    private static final boolean DH_WIDE_IDS = dhHasWideSections();
+    private static final int DH_CLIENT_LIMIT = 393216;
+    private static int dhRefused;
+
+    private static boolean dhHasWideSections() {
+        try {
+            ExtendedBlockStorage.class.getMethod("getBlockB3Array");
+            return true;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /** Whether the section at y can take a BlocksB3 plane and the chunk still fit in one NGClient Packet56. */
+    private boolean dhRoomForB3(int y) {
+        ExtendedBlockStorage[] s = this.field_76652_q;
+        int target = (y >> 4) + DH_OFFSET;
+        if (target < 0 || target >= s.length || s[target] != null && s[target].getBlockB3Array() != null) {
+            return true;
+        }
+        boolean sky = !this.field_76637_e.field_73011_w.field_76576_e;
+        int bytes = 256 + 42; // biomes and empty NG blocks
+        for (int i = 0; i < s.length; i++) {
+            ExtendedBlockStorage e = s[i];
+            boolean here = i == target;
+            if (!here && (e == null || e.func_76663_a())) {
+                continue;
+            }
+            bytes += 4096 + 2048 + 2048 + (sky ? 2048 : 0);
+            bytes += here || e.func_76660_i() != null ? 2048 : 0;
+            bytes += here || e.getBlockA2Array() != null ? 2048 : 0;
+            bytes += here || e.getBlockB3Array() != null ? 4096 : 0;
+        }
+        if (bytes <= DH_CLIENT_LIMIT) {
+            return true;
+        }
+        if (++dhRefused <= 10) {
+            System.out.println("[DeltaAgent/ids] WARNING: block above 65535 refused in chunk " + this.field_76635_g + "," + this.field_76647_h
+                    + " at Y " + y + ": the chunk would weigh " + bytes + " bytes once decompressed, over the " + DH_CLIENT_LIMIT
+                    + " NGClient accepts." + (dhRefused == 10 ? " Further refusals are not logged." : ""));
+        }
+        return false;
+    }
+
     private ExtendedBlockStorage dhSectionOrCreate(int y) {
         if (this.dhLegacyPending != null) {
             this.dhCommitLegacy();
@@ -368,7 +414,7 @@ public class Chunk {
         String[] parts = value.trim().split(":");
         int id = Integer.parseInt(parts[0].trim());
         int meta = parts.length > 1 ? Integer.parseInt(parts[1].trim()) & 15 : 0;
-        if (id < 0 || id > 4095) {
+        if (id < 0 || id > 0xFFFFFF) {
             throw new IllegalArgumentException("block ID out of range: " + id);
         }
         return new int[] {id, meta};
@@ -771,6 +817,9 @@ public class Chunk {
         if (l1 == par4 && i2 == par5) {
             return false;
         } else {
+            if (par4 > 0xFFFF && DH_WIDE_IDS && !this.dhRoomForB3(par2)) {
+                return false;
+            }
             ExtendedBlockStorage extendedblockstorage = this.dhSectionAt(par2);
             boolean flag = false;
             if (extendedblockstorage == null) {

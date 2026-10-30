@@ -6,8 +6,8 @@ import fr.deltabuild.deltaagent.core.PatchRegistry;
 
 /**
  * Block and item IDs up to 2^24, as NationsGlory has them: registries that grow on demand, item IDs
- * above 31999 saved and sent with an "idExt" int. Chunks keep 12-bit block IDs for now, so blocks
- * above 4095 are placeholders.
+ * above 31999 saved and sent with an "idExt" int, chunk sections that store 24-bit block IDs and
+ * send them to NGClient.
  */
 public final class IdsModule {
 
@@ -48,16 +48,15 @@ public final class IdsModule {
         Registries.configure(capacity);
         forget = Options.flag(FORGET, false, NG_FORGET);
         if (forget) {
-            Log.warn("ids", "The item ID format worlds declare in level.dat is not kept this time (-D" + FORGET
-                    + "=true): it is written again only if an item above 31999 is saved. Remove the option after"
-                    + " this start.");
+            Log.warn("ids", "The ID formats worlds declare in level.dat are not kept this time (-D" + FORGET
+                    + "=true): they are written again only for what is saved. Remove the option after this start.");
         }
         IdPatches.register(registry);
+        StoragePatches.register(registry);
         registry.addLoaderCheck(IdsModule::leaveOutOnNationsGloryServers);
         active = true;
         Log.info("ids", "Block and item registries start at " + capacity + " IDs and grow up to " + IdCapacity.LIMIT
-                + ". Items above 31999 are saved and sent with idExt; blocks above " + Placeholders.MAX_STORABLE
-                + " are placeholders until chunks store wider IDs.");
+                + ". Chunks store 24-bit block IDs (Add2, BlocksB3), items above 31999 use idExt.");
     }
 
     /** Module off: vanilla limits, but worlds that need it are still refused. */
@@ -86,9 +85,9 @@ public final class IdsModule {
         return forget;
     }
 
-    /** Highest NGBlockIdFormat this server can load: chunks store 12-bit IDs for now. */
+    /** Highest NGBlockIdFormat this server can load: 3 is Add2, palette sections and BlocksB3. */
     public static int blockFormat() {
-        return 0;
+        return active ? 3 : 0;
     }
 
     private IdsModule() {

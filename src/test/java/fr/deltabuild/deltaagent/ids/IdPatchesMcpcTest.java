@@ -10,7 +10,6 @@ import fr.deltabuild.deltaagent.core.Asm;
 import fr.deltabuild.deltaagent.core.ClassPatch;
 import fr.deltabuild.deltaagent.core.GameTransformer;
 import fr.deltabuild.deltaagent.core.PatchRegistry;
-import fr.deltabuild.deltaagent.core.PatchTarget;
 import fr.deltabuild.deltaagent.core.SafetyHook;
 import fr.deltabuild.deltaagent.height.HeightModule;
 import java.io.ByteArrayOutputStream;
@@ -49,10 +48,17 @@ class IdPatchesMcpcTest {
             "Registries.reserveBlock", "Registries.reserveItem", "Registries.track"});
         CALLS.put("net.minecraft.entity.monster.EntityEnderman", new String[] {"Registries.track"});
         CALLS.put("net.minecraftforge.common.MinecraftForge", new String[] {"Registries.blocks"});
-        CALLS.put("org.spigotmc.AntiXray", new String[] {"Registries.blocks", "Registries.flag", "Registries.setFlag"});
-        CALLS.put("net.minecraft.item.ItemMap", new String[] {"Placeholders.mapHistogramSize"});
-        CALLS.put("net.minecraft.world.chunk.Chunk", new String[] {"Placeholders.storable"});
-        CALLS.put("net.minecraft.world.chunk.storage.ExtendedBlockStorage", new String[] {"Placeholders.storedId"});
+        CALLS.put("org.spigotmc.AntiXray", new String[] {"Registries.blocks", "Registries.flag", "Registries.setFlag",
+            "XrayIds.narrow"});
+        CALLS.put("net.minecraft.item.ItemMap", new String[] {"MapHistogram.size", "MapHistogram.slot"});
+        CALLS.put("net.minecraft.world.chunk.storage.ExtendedBlockStorage", new String[0]);
+        CALLS.put("net.minecraft.world.chunk.storage.AnvilChunkLoader", new String[] {"SectionIds.read", "SectionIds.write"});
+        CALLS.put("net.minecraft.network.packet.Packet56MapChunks", new String[] {"ChunkPackets.extend"});
+        CALLS.put("net.minecraft.network.NetServerHandler", new String[] {"ChunkPackets.onSend", "ChunkPackets.afterSend"});
+        CALLS.put("net.minecraft.server.management.PlayerInstance", new String[] {"ChunkPackets.flushStart",
+            "ChunkPackets.flushEnd"});
+        CALLS.put("org.bukkit.craftbukkit.v1_6_R3.CraftChunkSnapshot", new String[] {"Snapshots.typeId"});
+        CALLS.put("org.bukkit.craftbukkit.v1_6_R3.CraftChunk", new String[] {"Snapshots.widen", "Snapshots.b3"});
         CALLS.put("net.minecraft.item.ItemStack", new String[] {"ItemIds.writeId", "ItemIds.readId"});
         CALLS.put("net.minecraft.network.packet.Packet", new String[] {"ItemIds.netId", "ItemIds.netTag", "ItemIds.readNetExt"});
         CALLS.put("net.minecraft.network.packet.Packet20NamedEntitySpawn", new String[] {"ItemIds.netId"});
@@ -83,7 +89,7 @@ class IdPatchesMcpcTest {
         HeightModule.registerTargets(registry);
         IdsModule.start(registry);
         GameTransformer transformer = new GameTransformer(registry);
-        assertEquals(15, CALLS.size());
+        assertEquals(20, CALLS.size());
         List<String> problems = new ArrayList<String>();
         for (Map.Entry<String, String[]> entry : CALLS.entrySet()) {
             String name = entry.getKey();
@@ -118,25 +124,48 @@ class IdPatchesMcpcTest {
     }
 
     @Test
-    void chunkGuardWorksOnBothChunks() throws Exception {
-        ClassNode vanilla = patched("net.minecraft.world.chunk.Chunk", new IdPatches.ChunkGuardPatch());
-        assertTrue(calls(vanilla, "Placeholders.storable"));
-        ClassNode node = Asm.read(chunkWithHeight());
-        assertEquals(1, new IdPatches.ChunkGuardPatch().apply(node));
-        new Analyzer<BasicValue>(new BasicVerifier()).analyze(node.name, Asm.require(node, "func_76592_a", "(IIIII)Z"));
+    void sectionReplacementKeepsEveryMcpcMember() throws Exception {
+        String name = "net/minecraft/world/chunk/storage/ExtendedBlockStorage";
+        byte[] ours = StoragePatches.sectionClass();
+        assertEquals(50, ours[7]);
+        ClassNode mcpc = Asm.read(McpcClasses.read(name));
+        ClassNode node = Asm.read(ours);
+        List<String> missing = new ArrayList<String>();
+        for (MethodNode method : mcpc.methods) {
+            if ((method.access & Opcodes.ACC_PRIVATE) == 0 && !hasMethod(node, method.name, method.desc)) {
+                missing.add(method.name + method.desc);
+            }
+        }
+        for (FieldNode field : mcpc.fields) {
+            if ((field.access & Opcodes.ACC_PRIVATE) == 0 && field(node, field.name) == null) {
+                missing.add(field.name);
+            }
+        }
+        String[][] ng = {
+            {"getBlockA2Array", "()Lnet/minecraft/world/chunk/NibbleArray;"},
+            {"setBlockA2Array", "(Lnet/minecraft/world/chunk/NibbleArray;)V"},
+            {"createBlockA2Array", "()Lnet/minecraft/world/chunk/NibbleArray;"},
+            {"clearA2Array", "()V"},
+            {"getBlockB3Array", "()[B"},
+            {"setBlockB3Array", "([B)V"},
+            {"createBlockB3Array", "()[B"},
+            {"clearB3Array", "()V"},
+        };
+        for (String[] method : ng) {
+            if (!hasMethod(node, method[0], method[1])) {
+                missing.add("NG " + method[0] + method[1]);
+            }
+        }
+        assertTrue(missing.isEmpty(), missing.toString());
     }
 
-    private static byte[] chunkWithHeight() {
-        PatchRegistry registry = new PatchRegistry();
-        HeightModule.registerTargets(registry);
-        PatchTarget replace = registry.get("net.minecraft.world.chunk.Chunk").get(0);
-        return new GameTransformer(registry(replace)).transform("x", "net.minecraft.world.chunk.Chunk", new byte[0]);
-    }
-
-    private static PatchRegistry registry(PatchTarget target) {
-        PatchRegistry registry = new PatchRegistry();
-        registry.add(target);
-        return registry;
+    private static boolean hasMethod(ClassNode node, String name, String desc) {
+        for (MethodNode method : node.methods) {
+            if (method.name.equals(name) && method.desc.equals(desc)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static ClassNode patched(String name, ClassPatch patch) throws Exception {

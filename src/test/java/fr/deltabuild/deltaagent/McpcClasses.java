@@ -4,6 +4,8 @@ import java.io.File;
 import java.io.InputStream;
 import java.net.URL;
 import java.net.URLClassLoader;
+import java.util.Collections;
+import java.util.Map;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
@@ -41,6 +43,11 @@ public final class McpcClasses {
      * path: like the LaunchClassLoader with its exclusions.
      */
     public static ClassLoader launchLike() throws Exception {
+        return launchLike(Collections.<String, byte[]>emptyMap());
+    }
+
+    /** Same, with some game classes replaced: binary name to class bytes. */
+    public static ClassLoader launchLike(final Map<String, byte[]> replaced) throws Exception {
         URL helper = McpcClasses.class.getClassLoader().getResource("fr/deltabuild/deltaagent/runtime/ItemIds.class");
         String root = helper.toString().substring(0, helper.toString().length() - "fr/deltabuild/deltaagent/runtime/ItemIds.class".length());
         URL[] urls = {jar().toURI().toURL(), new URL(root)};
@@ -52,10 +59,24 @@ public final class McpcClasses {
                 }
                 synchronized (getClassLoadingLock(name)) {
                     Class<?> loaded = findLoadedClass(name);
-                    return loaded != null ? loaded : findClass(name);
+                    if (loaded != null) {
+                        return loaded;
+                    }
+                    byte[] bytes = replaced.get(name);
+                    return bytes != null ? defineClass(name, bytes, 0, bytes.length) : findClass(name);
                 }
             }
         };
+    }
+
+    /** A replacement class shipped in the agent jar, e.g. "ids/ExtendedBlockStorage". */
+    public static byte[] replacement(String path) throws Exception {
+        try (InputStream in = McpcClasses.class.getClassLoader().getResourceAsStream("fr/deltabuild/deltaagent/" + path + ".class.bin")) {
+            if (in == null) {
+                throw new IllegalArgumentException("no replacement " + path);
+            }
+            return in.readAllBytes();
+        }
     }
 
     private McpcClasses() {

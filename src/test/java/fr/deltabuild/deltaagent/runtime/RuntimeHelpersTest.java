@@ -152,13 +152,14 @@ class RuntimeHelpersTest {
     void refusesWorldsItCannotRead() throws Exception {
         IdsModule.start(new PatchRegistry());
         Object blocks = tag();
-        call(nbt, "func_74768_a", blocks, "NGBlockIdFormat", 3);
+        call(nbt, "func_74768_a", blocks, "NGBlockIdFormat", 4);
         assertStops(blocks);
         Object items = tag();
         call(nbt, "func_74768_a", items, "NGItemIdFormat", 2);
         assertStops(items);
         Object fine = tag();
         call(nbt, "func_74768_a", fine, "NGItemIdFormat", 1);
+        call(nbt, "func_74768_a", fine, "NGBlockIdFormat", 3);
         call(worldFormats, "read", fine);
     }
 

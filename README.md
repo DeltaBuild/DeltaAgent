@@ -4,11 +4,11 @@ Javaagent unique pour serveur MCPC+ 1.6.4 : Java 17, monde de Y -64 à Y 319 et 
 
 DeltaAgent remplace [mcpc-java17](https://github.com/Loyto-SKHR/mcpc-java17) et [DeltaHeight](https://github.com/DeltaBuild/DeltaHeight). Il avance par étapes ; chaque étape garde le serveur jouable.
 
-## État : étape 2
+## État : étape 3
 
 - **java17** : reprise de mcpc-java17 2.1.0 à l'identique (version de Java simulée, modules du JDK ouverts, `sun.reflect`, `Launch`, ASM 9.7).
 - **hauteur** : reprise de DeltaHeight 1.0.0 (24 sections, protocole NGClient), avec en plus le patch AntiXray, le superflat réglable par monde et la lecture des maps de NGHeight.
-- **IDs** : registres de blocs et d'objets qui grandissent jusqu'à 2^24 IDs comme dans NGClient, objets au-delà de 31 999 sauvegardés et transmis au format NGClient (`idExt`). Les chunks gardent encore des IDs de bloc sur 12 bits : les blocs au-delà de 4095 sont enregistrés mais ne peuvent pas encore être posés, ça arrive à l'étape 3.
+- **IDs** : registres de blocs et d'objets qui grandissent jusqu'à 2^24 IDs comme dans NGClient, objets au-delà de 31 999 sauvegardés et transmis au format NGClient (`idExt`), chunks qui stockent des IDs de bloc sur 24 bits (`Add2`, `BlocksB3`), envoyés aux joueurs dans les blocs de données de NGClient. Les métadonnées et les biomes restent sur 4 et 8 bits : le passage à 16 bits arrive à l'étape 4.
 
 ## Prérequis
 
@@ -31,14 +31,14 @@ Les options `-XX:+UseConcMarkSweepGC` et `-XX:CMS...` n'existent plus en Java 17
 Au démarrage, la console doit afficher :
 
 ```
-[DeltaAgent/core] DeltaAgent 0.3.0 on Java 17.0.x (modules: java17, height, ids).
+[DeltaAgent/core] DeltaAgent 0.4.0-rc.1 on Java 17.0.x (modules: java17, height, ids).
 [DeltaAgent/java17] Java 17.0.x detected, reporting 1.7.0_80 to bypass the MCPC+ version check.
 [DeltaAgent/height] World extended to Y -64..319 (24 sections), NGClient protocol (NGNEID marker).
 [DeltaAgent/ids] Block and item registries start at 131072 IDs and grow up to 16777216. ...
-[DeltaAgent/core] Game transformer installed after cpw.mods.fml.common.asm.transformers.DeobfuscationTransformer (46 patched classes).
+[DeltaAgent/core] Game transformer installed after cpw.mods.fml.common.asm.transformers.DeobfuscationTransformer (47 patched classes).
 ...
 [DeltaAgent/height] Replaced net.minecraft.world.chunk.Chunk.
-[DeltaAgent/ids] Patched net.minecraft.world.chunk.Chunk (1 change).
+[DeltaAgent/ids] Replaced net.minecraft.world.chunk.storage.ExtendedBlockStorage.
 ```
 
 `max-build-height=256` dans `server.properties` passe à 320.
@@ -47,11 +47,11 @@ Au démarrage, la console doit afficher :
 
 Les maps se chargent sans conversion : même format, et les chunks marqués `NGHeight` sont reconnus comme ceux de DeltaHeight. Un fichier `ngheight-flat.properties` déjà présent dans une map est relu tel quel (voir Superflat).
 
-Retour en arrière : NGHeight et DeltaHeight relisent les maps sauvegardées par DeltaAgent, sauf les objets au-delà de 31 999 (voir Identifiants).
+Retour en arrière : NGHeight et DeltaHeight relisent les maps sauvegardées par DeltaAgent, sauf les objets au-delà de 31 999 et les blocs au-delà de 4095 (voir Identifiants).
 
-### Venir de mcpc-java17 ou d'un DeltaAgent de l'étape 1
+### Venir de mcpc-java17 ou d'un DeltaAgent plus ancien
 
-`-Dmcpcj17.idCapacity` n'est plus lu : les registres grandissent seuls. Les objets de 32 768 à 65 535 que ces versions sauvegardaient en `short` (relus en négatif, donc perdus) sont relus avec le bon ID si l'objet existe. Les mods qui s'arrêtaient à 65 535 (NGCore) enregistrent maintenant aussi leurs blocs au-delà.
+Les maps des étapes 1 et 2 se chargent sans conversion. `-Dmcpcj17.idCapacity` n'est plus lu : les registres grandissent seuls. Les objets de 32 768 à 65 535 que ces versions sauvegardaient en `short` (relus en négatif, donc perdus) sont relus avec le bon ID si l'objet existe. Les mods qui s'arrêtaient à 65 535 (NGCore) enregistrent maintenant aussi leurs blocs au-delà.
 
 ## Hauteur du monde
 
@@ -132,7 +132,45 @@ Un agrandissement est signalé dans la console : un mod qui a gardé une copie d
 
 ### Blocs au-delà de 4095
 
-Ils sont enregistrés normalement : le mod se charge et l'objet du bloc existe. Mais les chunks stockent encore les IDs de bloc sur 12 bits, donc ces blocs ne peuvent pas être posés : le chunk refuse la pose, et une section qui en reçoit un écrit de l'air. Le stockage étendu arrive à l'étape 3.
+Ils se posent, se sauvegardent et s'envoient aux joueurs comme les autres, jusqu'à 16 777 215.
+
+**Sauvegarde.** Chaque section garde ses IDs sur quatre plans, avec les noms de NGClient :
+
+| Tag | Bits de l'ID | Taille |
+| --- | --- | --- |
+| `Blocks` | 0 à 7 | 4096 octets |
+| `Add` | 8 à 11 | 2048 octets |
+| `Add2` | 12 à 15 | 2048 octets |
+| `BlocksB3` | 16 à 23 | 4096 octets |
+
+`Add2` et `BlocksB3` ne sont écrits que s'ils contiennent autre chose que des zéros : une section sans bloc au-delà de 4095 est sauvegardée comme en vanilla. Les sections au format palette des serveurs NationsGlory (`Palette`, `PaletteData`, `PaletteBits`) sont lues, puis réécrites avec `Add2` et `BlocksB3` à la sauvegarde suivante. Un bloc dont l'ID n'est plus enregistré (mod retiré) devient de l'air au chargement, comme MCPC+ le fait déjà.
+
+Dès qu'une section avec ces plans est lue ou sauvegardée, le `level.dat` reçoit `NGBlockIdFormat` : 1 pour `Add2`, 2 pour une palette lue, 3 pour `BlocksB3`. Une map marquée ne démarre plus avec `-Ddeltaagent.ids=false` (voir Sécurités) : un serveur sans ces plans lirait d'autres blocs à la place, ou de l'air, et le garderait à la sauvegarde suivante.
+
+**Réseau.** Seul Packet56 (envoi de chunks) peut porter les plans hauts. Après les données vanilla de chaque chunk, il contient les cinq blocs que NGClient attend, dans cet ordre, chacun avec son en-tête (code, version 1, masque de sections sur 24 bits) :
+
+| Bloc | Contenu | Par section |
+| --- | --- | --- |
+| `NGWL` | eau dans les blocs (vide) | 512 octets |
+| `NGID` | `Add2` | 2048 octets |
+| `NGMD` | métadonnées bits 4 à 15 (vide jusqu'à l'étape 4) | 6144 octets |
+| `NGBI` | biomes bits 8 à 15 (absent jusqu'à l'étape 4) | 256 octets par chunk |
+| `NGB3` | `BlocksB3` | 4096 octets |
+
+Vides, ces blocs ajoutent 42 octets par chunk. Les autres paquets de blocs sont remplacés juste avant l'envoi quand ils ne peuvent pas porter l'ID :
+
+- Packet53 (un bloc) porte 16 bits : au-delà de 65 535, le chunk entier part en Packet56 ;
+- Packet52 (plusieurs blocs) porte 12 bits : avec un ID de 4096 à 65 535, il devient un Packet53 par bloc, au-delà le chunk part en Packet56 ;
+- Packet51 (sections modifiées) : NGClient efface `Add2` et `BlocksB3` des sections qu'il reçoit, donc des sections qui en ont partent en Packet56.
+
+Pendant une même mise à jour de chunk, un joueur reçoit le chunk entier au plus une fois. Packet56 recrée le chunk côté client : les tile entities du chunk sont renvoyées juste après, et les entités qui s'y trouvent réapparaissent pour ce joueur (Packet29 puis nouvel envoi).
+
+**Le reste du serveur.** `ChunkSnapshot` et `getTypeId()` de Bukkit donnent l'ID complet. L'anti-xray de Spigot (coupé par défaut dans MCPC+) ne cache pas un bloc au-delà de 255 dont l'octet bas ressemble à un minerai. Sur les cartes (objet map), un bloc au-delà de 4095 prend la couleur de son matériau.
+
+**Limites.**
+
+- NGClient refuse un chunk de plus de 393 216 octets une fois décompressé. Avec la hauteur étendue, un chunk peut dépasser quand une vingtaine de ses sections ont `BlocksB3` (21 au plus si toutes ont aussi `Add` et `Add2`) : la pose d'un bloc au-delà de 65 535 qui ferait dépasser est refusée, et la console le signale. Un chunk déjà trop gros (posé par un autre serveur ou directement dans la section) est signalé à l'envoi.
+- Particules de casse (Packet61), blocs qui tombent (Packet23) et événements de bloc (Packet54, coffres, pistons) gardent les limites vanilla : NGClient les lit sur 12 ou 16 bits.
 
 ### Objets au-delà de 31 999
 
@@ -158,7 +196,7 @@ DeltaAgent arrête le serveur (code de sortie 42) plutôt que de tourner à moit
 
 - au démarrage, si `mcpc-java17-agent.jar`, `ngheight-agent.jar` ou `DeltaHeight.jar` est aussi chargé ;
 - au démarrage, si le module de hauteur est désactivé (`-Ddeltaagent.height=false`) alors que la map a été sauvegardée avec la hauteur étendue. La vérification lit les fichiers `region` de la map (`level-name` de `server.properties`), de ses dimensions et des autres dossiers du serveur qui contiennent un `level.dat` ; elle s'arrête au premier chunk marqué ;
-- au chargement d'un monde dont le `level.dat` déclare un format d'IDs que le serveur ne sait pas lire : `NGBlockIdFormat` (blocs au-delà de 4095 dans les chunks, pas avant l'étape 3), `NGItemIdFormat` supérieur à 1, ou `NGItemIdFormat=1` avec `-Ddeltaagent.ids=false` ;
+- au chargement d'un monde dont le `level.dat` déclare un format d'IDs que le serveur ne sait pas lire : `NGBlockIdFormat` supérieur à 3, `NGItemIdFormat` supérieur à 1, ou l'un des deux avec `-Ddeltaagent.ids=false` ;
 - si une modification importante échoue (stockage, sauvegarde, protocole, registres) ou si `Chunk` n'a pas été remplacée.
 
 ## Options
@@ -170,10 +208,10 @@ DeltaAgent arrête le serveur (code de sortie 42) plutôt que de tourner à moit
 | `deltaagent.height` | `true` | `false` désactive le module de hauteur (monde de 0 à 255) |
 | `deltaagent.height.legacyView` | vide | Classes qui reçoivent la vue 16 sections, séparées par des virgules (voir legacyView). Anciens noms : `deltaheight.legacyView`, `ngheight.legacyView` |
 | `deltaagent.height.guard` | `true` | `false` désactive la vérification de hauteur de la map quand le module est désactivé |
-| `deltaagent.ids` | `true` | `false` garde les limites vanilla (blocs 0-4095, objets 0-31999) ; les mondes marqués `NGItemIdFormat` sont alors refusés. `-Ddeltaagent.ids.capacity=off` marche encore |
+| `deltaagent.ids` | `true` | `false` garde les limites vanilla (blocs 0-4095, objets 0-31999) ; les mondes marqués `NGItemIdFormat` ou `NGBlockIdFormat` sont alors refusés. `-Ddeltaagent.ids.capacity=off` marche encore |
 | `deltaagent.ids.capacity` | `131072` | Taille de départ des registres de blocs et d'objets, de 4096 à 16777216, arrondie à la puissance de 2 supérieure. Ils grandissent ensuite seuls si besoin. `mcpcj17.idCapacity` n'est plus lu |
 | `deltaagent.ids.blockWindow` | `16337-19475` | Fenêtre où Forge choisit les IDs de bloc libres (voir Identifiants). Ancien nom : `ng.blocs.fenetre` (celui de NGClient) |
-| `deltaagent.ids.forgetWorldFormat` | `false` | `true` pour un seul démarrage : le `NGItemIdFormat` lu dans les `level.dat` n'est pas gardé, il n'est réécrit que si un objet au-delà de 31 999 est sauvegardé. Sert à retirer la marque d'une map qui n'a plus de tels objets. Ancien nom : `ngid.formatmonde.oublier` (celui de NationsGlory) |
+| `deltaagent.ids.forgetWorldFormat` | `false` | `true` pour un seul démarrage : le `NGItemIdFormat` et le `NGBlockIdFormat` lus dans les `level.dat` ne sont pas gardés, ils ne sont réécrits que si un objet au-delà de 31 999 ou une section au-delà de 4095 est sauvegardé. Sert à retirer la marque d'une map qui n'en a plus. Ancien nom : `ngid.formatmonde.oublier` (celui de NationsGlory) |
 | `deltaagent.debug` | `false` | Affiche la liste des transformers et plus de détails au démarrage. Ancien nom : `deltaheight.debug` |
 
 ## Compiler
@@ -184,13 +222,13 @@ Il faut un JDK 17. Le build ne télécharge rien d'autre que Gradle et ses dépe
 ./gradlew build
 ```
 
-Le jar sort dans `build/libs/DeltaAgent.jar`, après les tests. La version (0.3.0 par défaut) se change dans `build.gradle` ; sur un tag `vX.Y.Z`, GitHub Actions construit le jar avec la version du tag et le publie dans une release.
+Le jar sort dans `build/libs/DeltaAgent.jar`, après les tests. La version (0.4.0-rc.1 par défaut) se change dans `build.gradle` ; sur un tag `vX.Y.Z`, GitHub Actions construit le jar avec la version du tag et le publie dans une release.
 
 ### Classes de remplacement et classes runtime
 
-`Chunk` (dans `src/replace/java`) est compilée contre `libs/mcpc-stubs.jar`, qui contient seulement les signatures des classes MCPC+ utilisées (pas de code), puis ramenée en bytecode Java 6.
+`Chunk` et `ExtendedBlockStorage` (dans `src/replace/java`) sont compilées contre `libs/mcpc-stubs.jar`, qui contient seulement les signatures des classes MCPC+ utilisées (pas de code), puis ramenées en bytecode Java 6.
 
-Les classes de `src/runtime/java` (package `fr.deltabuild.deltaagent.runtime`) sont appelées par les classes du jeu patchées et manipulent des types du jeu (NBT, `ItemStack`) : elles sont aussi compilées contre les stubs, et c'est le LaunchClassLoader qui les charge, comme une classe de mod. Au démarrage, elles sont copiées dans un dossier temporaire ajouté à son classpath.
+Les classes de `src/runtime/java` (package `fr.deltabuild.deltaagent.runtime`) sont appelées par les classes du jeu patchées et manipulent des types du jeu (NBT, `ItemStack`, sections, paquets) : elles sont aussi compilées contre les stubs et les classes de remplacement, et c'est le LaunchClassLoader qui les charge, comme une classe de mod. Au démarrage, elles sont copiées dans un dossier temporaire ajouté à son classpath.
 
 Si l'une de ces classes utilise de nouvelles classes ou méthodes de MCPC+, il faut régénérer les stubs :
 
@@ -205,7 +243,7 @@ Deux bancs vérifient que DeltaAgent modifie les classes comme les agents qu'il 
 - `./gradlew compareMcpcJava17`, avec `libs/mcpc-java17-agent.jar` : les patchs Java 17 doivent être identiques (les IDs factices de mcpc-java17 ne sont plus comparés, le module d'IDs les a remplacés). Résultat attendu : `different: 0` et `Bundled ASM and Launch: identical`.
 - `./gradlew compareDeltaHeight`, avec `libs/DeltaHeight.jar` (1.0.0) : les patchs de hauteur doivent être identiques, sauf les changements voulus listés par le banc (`Chunk` et `AntiXray`). Résultat attendu : `unexpected differences: 0`.
 
-Quand `libs/mcpc-srg.jar` est présent, `./gradlew test` applique aussi les patchs d'IDs aux vraies classes de MCPC+ et teste les classes runtime avec les vraies classes NBT ; sans lui (GitHub Actions), ces tests sont sautés.
+Quand `libs/mcpc-srg.jar` est présent, `./gradlew test` applique aussi les patchs d'IDs aux vraies classes de MCPC+, vérifie que la section remplacée garde tous les membres de celle de MCPC+, et teste les classes runtime avec les vraies classes NBT et `NibbleArray` (sauvegarde des plans, palettes, Packet56 relu comme NGClient le lit) ; sans lui (GitHub Actions), ces tests sont sautés.
 
 D'autres jars peuvent être ajoutés avec `-PbenchJars=chemin/a.jar,chemin/b.jar` (par exemple `WorldEdit.jar` et `VoxelSniper.jar` pour le banc de hauteur). Ces jars contiennent du code Minecraft ou d'autres projets : ils sont dans le `.gitignore` et ne doivent pas être publiés.
 
@@ -217,10 +255,12 @@ src/main/java/fr/deltabuild/deltaagent/
   core/              options, journaux, sécurités, transformer de jeu
   java17/            module Java 17 (ex mcpc-java17)
   height/            module de hauteur (ex DeltaHeight), patchs des plugins
-  ids/               module d'IDs : registres, patchs, fenêtre Forge
+  ids/               module d'IDs : registres, patchs (IdPatches, StoragePatches), fenêtre Forge
 src/main/java/org/objectweb/asm/LegacyAsmApi.java   appelé par l'ASM patché servi au serveur
-src/replace/java/    classes remplacées en entier (Chunk)
-src/runtime/java/    classes chargées par le LaunchClassLoader (NBT des objets, level.dat)
+src/replace/java/    classes remplacées en entier (Chunk, ExtendedBlockStorage)
+src/runtime/java/    classes chargées par le LaunchClassLoader :
+                       ItemIds (objets), WorldFormats (level.dat), SectionIds (plans des sections),
+                       ChunkPackets (paquets de blocs), Snapshots, XrayIds, MapHistogram
 src/bench/java/      bancs de comparaison avec mcpc-java17 et DeltaHeight
 tools/               Deobf et Stubs
 libs/                launchwrapper 1.8 et stubs MCPC+ (compilation seulement)
@@ -230,4 +270,4 @@ L'agent utilise sa propre copie d'ASM, relocalisée sous `fr.deltabuild.deltaage
 
 ## Licence
 
-DeltaAgent est sous licence MIT (voir `LICENSE`). Le code repris de mcpc-java17 reste sous sa licence MIT d'origine ; le jar embarque ASM (BSD 3-Clause, voir `licenses/ASM-LICENSE.txt`) et une classe `Launch` dérivée de launchwrapper (MIT). `src/replace/java/net/minecraft/world/chunk/Chunk.java` est dérivé du code du serveur Minecraft / MCPC+ et `libs/mcpc-stubs.jar` contient des signatures de classes MCPC+ : ces parties ne sont pas couvertes par la licence MIT.
+DeltaAgent est sous licence MIT (voir `LICENSE`). Le code repris de mcpc-java17 reste sous sa licence MIT d'origine ; le jar embarque ASM (BSD 3-Clause, voir `licenses/ASM-LICENSE.txt`) et une classe `Launch` dérivée de launchwrapper (MIT). `src/replace/java/net/minecraft/world/chunk/Chunk.java` et `src/replace/java/net/minecraft/world/chunk/storage/ExtendedBlockStorage.java` sont dérivés du code du serveur Minecraft / MCPC+ et `libs/mcpc-stubs.jar` contient des signatures de classes MCPC+ : ces parties ne sont pas couvertes par la licence MIT.

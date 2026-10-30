@@ -22,14 +22,17 @@ public final class WorldFormats {
 
     /** Once a world declares a format, every save keeps it, unless asked to forget it. */
     private static volatile int declaredItems;
+    private static volatile int declaredBlocks;
 
     public static void read(NBTTagCompound data) {
         int blocks = number(data.func_74781_a(BLOCKS));
         int items = number(data.func_74781_a(ITEMS));
         if (blocks > IdsModule.blockFormat()) {
+            String fix = IdsModule.blockFormat() == 0
+                    ? "Remove -D" + IdsModule.OPTION + "=false." : "Use the server that wrote this world.";
             Safety.stop("ids", "This world declares " + BLOCKS + "=" + blocks + " in level.dat: its chunks hold block IDs"
-                    + " above 4095, which this version cannot read yet. Loading it would turn those blocks into others"
-                    + " or air, and the next save would keep it. Use the server that wrote this world.");
+                    + " this server cannot read. Loading it would turn those blocks into others or air, and the next"
+                    + " save would keep it. " + fix);
             return;
         }
         if (items > IdsModule.itemFormat()) {
@@ -39,8 +42,14 @@ public final class WorldFormats {
                     + " idExt. Without that support they would read back as ID 0 and vanish at the next save. " + fix);
             return;
         }
-        if (items > declaredItems && !IdsModule.forgetWorldFormat()) {
+        if (IdsModule.forgetWorldFormat()) {
+            return;
+        }
+        if (items > declaredItems) {
             declaredItems = items;
+        }
+        if (blocks > declaredBlocks) {
+            declaredBlocks = blocks;
         }
     }
 
@@ -48,6 +57,10 @@ public final class WorldFormats {
         int items = Math.max(declaredItems, ItemIds.extendedWritten() ? 1 : 0);
         if (items > 0) {
             data.func_74768_a(ITEMS, items);
+        }
+        int blocks = Math.max(declaredBlocks, SectionIds.format());
+        if (blocks > 0) {
+            data.func_74768_a(BLOCKS, blocks);
         }
     }
 

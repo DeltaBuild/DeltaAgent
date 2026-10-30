@@ -62,7 +62,7 @@ class IdsModuleTest {
     void registersItsGameClasses() {
         PatchRegistry registry = new PatchRegistry();
         IdsModule.start(registry);
-        assertEquals(15, registry.size());
+        assertEquals(20, registry.size());
         assertTrue(registry.get("net.minecraft.block.Block").get(0).critical());
         assertTrue(registry.get("net.minecraft.item.ItemStack").get(0).critical());
         assertFalse(registry.get("org.spigotmc.AntiXray").get(0).critical());
@@ -101,6 +101,6 @@ class IdsModuleTest {
         try (URLClassLoader server = new URLClassLoader(new URL[] {dir.toURI().toURL()}, null)) {
             new LoaderChecks(registry).run(server);
         }
-        assertEquals(15, registry.size());
+        assertEquals(20, registry.size());
     }
 }

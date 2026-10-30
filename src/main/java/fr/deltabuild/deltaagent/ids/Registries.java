@@ -58,9 +58,6 @@ public final class Registries {
 
     /** Block constructor: makes room for the ID. */
     public static void onNewBlock(int id) {
-        if (id > Placeholders.MAX_STORABLE) {
-            Placeholders.registered(id);
-        }
         if (id < 0 || id >= blocks) {
             grow(Kind.BLOCK, id);
         }
