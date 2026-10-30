@@ -222,7 +222,7 @@ Il faut un JDK 17. Le build ne télécharge rien d'autre que Gradle et ses dépe
 ./gradlew build
 ```
 
-Le jar sort dans `build/libs/DeltaAgent.jar`, après les tests. La version (0.4.0-rc.1 par défaut) se change dans `build.gradle` ; sur un tag `vX.Y.Z`, GitHub Actions construit le jar avec la version du tag et le publie dans une release.
+Le jar sort dans `build/libs/DeltaAgent.jar`, après les tests. La version (0.4.0-rc.1 par défaut) se change dans `build.gradle` ; sur un tag `vX.Y.Z`, GitHub Actions construit le jar avec la version du tag et le publie dans une release, et sur un tag `vX.Y.Z-rc.N` dans une pre-release.
 
 ### Classes de remplacement et classes runtime
 
