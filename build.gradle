@@ -21,12 +21,20 @@ plugins {
 
 group = 'fr.deltabuild'
 // Replaced by the tag version when GitHub Actions builds a release (-PreleaseVersion=...).
-version = findProperty('releaseVersion') ?: '0.1.0'
+version = findProperty('releaseVersion') ?: '0.2.0'
 
 def asmVersion = '9.7'
 
 sourceSets {
-    // Step 0 bench: compares DeltaAgent with mcpc-java17 on real classes. Not part of the build.
+    // Game classes replaced whole (Chunk), compiled against MCPC+ stubs.
+    replace {
+        java { srcDirs = ['src/replace/java'] }
+    }
+    // Tools to regenerate libs/mcpc-srg.jar and libs/mcpc-stubs.jar.
+    tools {
+        java { srcDirs = ['tools'] }
+    }
+    // Benches comparing DeltaAgent with mcpc-java17 and DeltaHeight on real classes. Not part of the build.
     bench {
         java { srcDirs = ['src/bench/java'] }
     }
@@ -35,6 +43,12 @@ sourceSets {
 tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.release = 17
+}
+
+// Replacement classes run inside Minecraft 1.6.4: Java 8 source, turned into Java 6 bytecode below.
+tasks.named('compileReplaceJava') {
+    options.release = 8
+    options.compilerArgs += ['-Xlint:-options']
 }
 
 repositories { mavenCentral() }
@@ -68,6 +82,12 @@ dependencies {
     testImplementation "org.ow2.asm:asm:${asmVersion}"
     testImplementation "org.ow2.asm:asm-tree:${asmVersion}"
     testImplementation files('libs/launchwrapper-1.8.jar')
+
+    replaceCompileOnly files('libs/mcpc-stubs.jar')
+
+    toolsImplementation "org.ow2.asm:asm:${asmVersion}"
+    toolsImplementation "org.ow2.asm:asm-tree:${asmVersion}"
+    toolsImplementation "org.ow2.asm:asm-commons:${asmVersion}"
 
     benchImplementation "org.ow2.asm:asm:${asmVersion}"
     benchImplementation "org.ow2.asm:asm-tree:${asmVersion}"
@@ -319,6 +339,86 @@ def relocate = tasks.register('relocateAgent') {
     }
 }
 
+/*
+ * Replacement classes as Java 6 bytecode (class version 50), like the rest of MCPC+: the coremods
+ * of that time expect it, and so do the placeholder ID patches, which skip newer classes. Shipped
+ * as fr/deltabuild/deltaagent/height/<Name>.class.bin.
+ */
+def replaceClassesDirs = sourceSets.replace.output.classesDirs
+def replaceBinDir = layout.buildDirectory.dir('replace-bin')
+def replaceBin = tasks.register('replaceBin') {
+    dependsOn tasks.named('replaceClasses')
+    inputs.files(replaceClassesDirs)
+    outputs.dir(replaceBinDir)
+    doLast {
+        def out = replaceBinDir.get().asFile
+        out.deleteDir()
+        replaceClassesDirs.each { dir ->
+            if (dir.isDirectory()) {
+                dir.eachFileRecurse(groovy.io.FileType.FILES) { f ->
+                    if (f.name.endsWith('.class')) {
+                        byte[] bytes = f.bytes
+                        bytes[6] = 0
+                        bytes[7] = 50
+                        def target = new File(out, 'fr/deltabuild/deltaagent/height/' + f.name + '.bin')
+                        target.parentFile.mkdirs()
+                        target.bytes = bytes
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Tests read the replacement Chunk as the agent does.
+test {
+    dependsOn replaceBin
+    classpath += files(replaceBinDir)
+}
+
+// MCPC+ jars, not published: only needed to regenerate the stubs (see tools/Deobf.java).
+def mcpcJars = files('libs/mcpc-srg.jar', 'libs/minecraft_server.jar')
+def checkMcpc = { List<String> names ->
+    names.each { name ->
+        if (!file("libs/${name}").exists()) {
+            throw new GradleException("Missing libs/${name} (see tools/Deobf.java)")
+        }
+    }
+}
+
+tasks.register('mcpcSrg', JavaExec) {
+    group = 'deltaagent'
+    description = 'Builds libs/mcpc-srg.jar (MCPC+ jar with SRG names)'
+    classpath = sourceSets.tools.runtimeClasspath
+    mainClass = 'Deobf'
+    args 'build/srg.txt', 'libs/minecraft_server.jar', 'libs/mcpc-srg.jar'
+    doFirst {
+        checkMcpc(['minecraft_server.jar'])
+        if (!file('build/srg.txt').exists()) {
+            throw new GradleException('Missing build/srg.txt (see tools/Deobf.java)')
+        }
+    }
+}
+
+// The replacement classes compiled against the real MCPC+ jars, to find what the stubs need.
+def compileReplaceMcpc = tasks.register('compileReplaceMcpc', JavaCompile) {
+    source = sourceSets.replace.java
+    classpath = mcpcJars
+    destinationDirectory = layout.buildDirectory.dir('replace-mcpc')
+    options.release = 8
+    options.compilerArgs += ['-Xlint:-options']
+    doFirst { checkMcpc(['mcpc-srg.jar', 'minecraft_server.jar']) }
+}
+
+tasks.register('mcpcStubs', JavaExec) {
+    group = 'deltaagent'
+    description = 'Regenerates libs/mcpc-stubs.jar'
+    dependsOn compileReplaceMcpc
+    classpath = sourceSets.tools.runtimeClasspath
+    mainClass = 'Stubs'
+    args 'libs/mcpc-stubs.jar', 'build/replace-mcpc', 'libs/mcpc-srg.jar', 'libs/minecraft_server.jar'
+}
+
 tasks.named('jar') {
     enabled = false
 }
@@ -340,6 +440,7 @@ def agentJar = tasks.register('agentJar', Jar) {
         include 'org/objectweb/asm/commons/Remapping*Adapter*.class'
     }
     from(tasks.named('processResources'))
+    from(replaceBin)
     from('LICENSE') { into 'META-INF' }
     from('licenses') { into 'META-INF/licenses' }
     manifest {
@@ -382,5 +483,31 @@ tasks.register('compareMcpcJava17', JavaExec) {
             jars.addAll(extra.toString().split(',').collect { it.trim() }.findAll { it })
         }
         args = ['libs/mcpc-java17-agent.jar', agentJar.get().archiveFile.get().asFile.path] + jars
+    }
+}
+
+/*
+ * Step 1 bench: runs the height patches of DeltaHeight 1.0.0 and of DeltaAgent on the same classes
+ * and fails on any difference that is not intended. Needs libs/DeltaHeight.jar and libs/mcpc-srg.jar
+ * (not published); plugin jars can be added with -PbenchJars=a.jar,b.jar.
+ */
+tasks.register('compareDeltaHeight', JavaExec) {
+    group = 'verification'
+    description = 'Compares the height module with DeltaHeight on real classes'
+    dependsOn agentJar
+    classpath = sourceSets.bench.runtimeClasspath
+    mainClass = 'fr.deltabuild.deltaagent.bench.CompareDeltaHeight'
+    doFirst {
+        ['libs/DeltaHeight.jar', 'libs/mcpc-srg.jar'].each { name ->
+            if (!file(name).exists()) {
+                throw new GradleException("Missing ${name} (see README, section Compiler)")
+            }
+        }
+        def jars = ['libs/mcpc-srg.jar']
+        def extra = findProperty('benchJars')
+        if (extra) {
+            jars.addAll(extra.toString().split(',').collect { it.trim() }.findAll { it })
+        }
+        args = ['libs/DeltaHeight.jar', agentJar.get().archiveFile.get().asFile.path, 'libs/launchwrapper-1.8.jar'] + jars
     }
 }

@@ -18,7 +18,8 @@ out/
 Thumbs.db
 desktop.ini
 
-# MCPC+ and mcpc-java17 jars used by the bench (copy them from the server, never publish them)
+# Jars used by the stubs and the benches (copy them from the server, never publish them)
 libs/minecraft_server.jar
 libs/mcpc-srg.jar
 libs/mcpc-java17-agent.jar
+libs/DeltaHeight.jar

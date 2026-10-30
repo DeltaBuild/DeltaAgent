@@ -38,3 +38,7 @@ Third-party content, not covered by the licenses above:
   - launchwrapper 1.8 (MIT License): libs/launchwrapper-1.8.jar, used to compile
     only, and src/main/resources/fr/deltabuild/deltaagent/java17/Launch.bin,
     derived from its net/minecraft/launchwrapper/Launch class.
+  - src/replace/java/net/minecraft/world/chunk/Chunk.java is derived from the
+    Minecraft / MCPC+ server code, and libs/mcpc-stubs.jar contains MCPC+ class
+    and method signatures. These parts remain subject to the rights of their
+    respective owners.

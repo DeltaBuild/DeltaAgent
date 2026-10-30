@@ -30,9 +30,6 @@ public final class GameTransformer implements IClassTransformer {
                 return target.replacement;
             }
             ClassNode node = Asm.read(bytes);
-            if (!Asm.isJava6OrOlder(node)) {
-                throw new IllegalStateException("not Java 6 bytecode (class version " + (node.version & 0xFFFF) + ")");
-            }
             int changes = target.patch.apply(node);
             if (changes <= 0) {
                 throw new IllegalStateException("expected code not found");

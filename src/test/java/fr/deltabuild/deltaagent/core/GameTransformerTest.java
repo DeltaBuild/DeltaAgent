@@ -19,26 +19,14 @@ import org.objectweb.asm.tree.FieldNode;
 
 class GameTransformerTest {
 
-    /** Thrown instead of halting the JVM. */
-    static final class Stopped extends RuntimeException {
-        Stopped() {
-            super("stopped");
-        }
-    }
-
-    private Runnable realHalt;
-
     @BeforeEach
     void catchHalt() {
-        realHalt = Safety.halt;
-        Safety.halt = () -> {
-            throw new Stopped();
-        };
+        SafetyHook.install();
     }
 
     @AfterEach
     void restoreHalt() {
-        Safety.halt = realHalt;
+        SafetyHook.uninstall();
     }
 
     @Test
@@ -83,15 +71,7 @@ class GameTransformerTest {
         PatchRegistry registry = new PatchRegistry();
         registry.add(PatchTarget.patch("test", "a.Target", true, node -> 0));
         byte[] bytes = emptyClass("a/Target", Opcodes.V1_6);
-        assertThrows(Stopped.class, () -> new GameTransformer(registry).transform("x", "a.Target", bytes));
-    }
-
-    @Test
-    void refusesBytecodeNewerThanJava6() {
-        PatchRegistry registry = new PatchRegistry();
-        registry.add(PatchTarget.patch("test", "a.Target", true, node -> 1));
-        byte[] bytes = emptyClass("a/Target", Opcodes.V1_8);
-        assertThrows(Stopped.class, () -> new GameTransformer(registry).transform("x", "a.Target", bytes));
+        assertThrows(SafetyHook.Stopped.class, () -> new GameTransformer(registry).transform("x", "a.Target", bytes));
     }
 
     @Test

@@ -5,7 +5,7 @@ package fr.deltabuild.deltaagent.core;
  */
 public final class Log {
 
-    private static final boolean DEBUG = Options.flag("deltaagent.debug", false);
+    private static final boolean DEBUG = Options.flag("deltaagent.debug", false, "deltaheight.debug");
 
     public static void info(String module, String message) {
         System.out.println(prefix(module) + message);

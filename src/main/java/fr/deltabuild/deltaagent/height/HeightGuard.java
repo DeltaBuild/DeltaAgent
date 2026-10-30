@@ -20,8 +20,9 @@ import java.util.zip.GZIPInputStream;
 import java.util.zip.InflaterInputStream;
 
 /**
- * Refuses to start a world saved with the extended height (Y -64..319) when nothing on the command
- * line handles that height. MCPC+ alone cannot read those chunks and would generate them again.
+ * Refuses to start a world saved with the extended height (Y -64..319) when the height module is
+ * off and no other agent handles that height. MCPC+ alone cannot read those chunks and would
+ * generate them again.
  *
  * <p>Looks for the tag that NGHeight and DeltaHeight write into every chunk they save. Region files
  * are read before the server starts, so a hit stops it before a single chunk is loaded.
@@ -63,9 +64,9 @@ public final class HeightGuard {
             scanFolder(world, 0, deadline, result);
             if (result.markedRegion != null) {
                 Safety.stop("height", "The world '" + world.getName() + "' was saved with the extended height (Y -64..319), see "
-                        + root.toPath().relativize(result.markedRegion.toPath()) + ". Start the server with its height"
-                        + " agent (ngheight-agent.jar or DeltaHeight.jar) next to DeltaAgent; without it, MCPC+ would"
-                        + " regenerate those chunks.");
+                        + root.toPath().relativize(result.markedRegion.toPath()) + ", but the height module is off"
+                        + " (-D" + HeightModule.OPTION + "=false). Turn it back on; without it, MCPC+ would regenerate"
+                        + " those chunks.");
                 return;
             }
         }
