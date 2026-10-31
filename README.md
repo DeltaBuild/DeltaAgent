@@ -7,7 +7,7 @@ DeltaAgent remplace [mcpc-java17](https://github.com/Loyto-SKHR/mcpc-java17) et 
 ## Modules
 
 - **java17** : reprise de mcpc-java17 2.1.0 à l'identique (version de Java simulée, modules du JDK ouverts, `sun.reflect`, `Launch`, ASM 9.7).
-- **hauteur** : reprise de DeltaHeight 1.0.0 (24 sections, protocole NGClient), avec en plus le patch AntiXray, le superflat réglable par monde et la lecture des maps de NGHeight.
+- **hauteur** : reprise de DeltaHeight 1.0.0 (24 sections, protocole NGClient), avec en plus le patch AntiXray et le superflat réglable par monde.
 - **IDs** : registres de blocs et d'objets qui grandissent jusqu'à 2^24 IDs comme dans NGClient, objets au-delà de 31 999 sauvegardés et transmis au format NGClient (`idExt`), chunks qui stockent des IDs de bloc sur 24 bits (`Add2`, `BlocksB3`), des métadonnées sur 16 bits (`DataAdd`, `Data2`) et des biomes sur 16 bits (`Biomes16`), envoyés aux joueurs dans les blocs de données de NGClient. WorldEdit, AsyncWorldEdit et VoxelSniper travaillent avec ces blocs.
 
 ## Prérequis
@@ -20,7 +20,7 @@ DeltaAgent remplace [mcpc-java17](https://github.com/Loyto-SKHR/mcpc-java17) et 
 
 1. Faire une sauvegarde de la map avant le premier lancement.
 2. Copier `DeltaAgent.jar` dans le dossier du serveur.
-3. Mettre `-javaagent:DeltaAgent.jar` dans la commande de lancement, avant `-jar` (ou avant la classe principale), et retirer les anciens agents : `mcpc-java17-agent.jar`, `ngheight-agent.jar`, `DeltaHeight.jar`. DeltaAgent refuse de démarrer s'ils sont encore là.
+3. Mettre `-javaagent:DeltaAgent.jar` dans la commande de lancement, avant `-jar` (ou avant la classe principale), et retirer les anciens agents : `mcpc-java17-agent.jar`, `DeltaHeight.jar`. DeltaAgent refuse de démarrer s'ils sont encore là.
 
    ```
    java -javaagent:DeltaAgent.jar -Xmx8G -jar mcpc.jar nogui
@@ -43,11 +43,11 @@ Au démarrage, la console doit afficher :
 
 `max-build-height=256` dans `server.properties` passe à 320.
 
-### Venir de NGHeight ou de DeltaHeight
+### Venir de DeltaHeight
 
-Les maps se chargent sans conversion : même format, et les chunks marqués `NGHeight` sont reconnus comme ceux de DeltaHeight. Un fichier `ngheight-flat.properties` déjà présent dans une map est relu tel quel (voir Superflat).
+Les maps se chargent sans conversion : même format.
 
-Retour en arrière : NGHeight et DeltaHeight relisent les maps sauvegardées par DeltaAgent, sauf les objets au-delà de 31 999 et les blocs au-delà de 4095 (voir Identifiants).
+Retour en arrière : DeltaHeight relit les maps sauvegardées par DeltaAgent, sauf les objets au-delà de 31 999 et les blocs au-delà de 4095 (voir Identifiants).
 
 ### Venir de mcpc-java17 ou d'un DeltaAgent plus ancien
 
@@ -106,7 +106,7 @@ replaceBedrockAt0=true
 - `replaceBedrockAt0` : remplace la bedrock vanilla de Y 0 par `fill` ;
 - `enabled=false` : garde le superflat vanilla.
 
-Les blocs s'écrivent `id:meta`, les IDs de mods sont acceptés. Les couches du preset ne bougent pas (par défaut 2 de terre et l'herbe à Y 3), et les chunks déjà générés ne sont pas modifiés. Si le monde n'a pas de `deltaagent-flat.properties` mais un `ngheight-flat.properties`, c'est celui-là qui est lu.
+Les blocs s'écrivent `id:meta`, les IDs de mods sont acceptés. Les couches du preset ne bougent pas (par défaut 2 de terre et l'herbe à Y 3), et les chunks déjà générés ne sont pas modifiés.
 
 ### legacyView
 
@@ -249,7 +249,7 @@ Si le serveur a sa propre prise en charge des grands IDs (classe `NGCapaciteIds`
 
 DeltaAgent arrête le serveur (code de sortie 42) plutôt que de tourner à moitié et d'abîmer la map :
 
-- au démarrage, si `mcpc-java17-agent.jar`, `ngheight-agent.jar` ou `DeltaHeight.jar` est aussi chargé ;
+- au démarrage, si `mcpc-java17-agent.jar` ou `DeltaHeight.jar` est aussi chargé ;
 - au démarrage, si le module de hauteur est désactivé (`-Ddeltaagent.height=false`) alors que la map a été sauvegardée avec la hauteur étendue. La vérification lit les fichiers `region` de la map (`level-name` de `server.properties`), de ses dimensions et des autres dossiers du serveur qui contiennent un `level.dat` ; elle s'arrête au premier chunk marqué ;
 - au chargement d'un monde dont le `level.dat` déclare un format d'IDs que le serveur ne sait pas lire : `NGBlockIdFormat` supérieur à 5, `NGItemIdFormat` supérieur à 1, ou l'un des deux avec `-Ddeltaagent.ids=false` ;
 - si une modification importante échoue (stockage, sauvegarde, protocole, registres) ou si `Chunk` n'a pas été remplacée.
@@ -261,7 +261,7 @@ DeltaAgent arrête le serveur (code de sortie 42) plutôt que de tourner à moit
 | Option | Défaut | Effet |
 | --- | --- | --- |
 | `deltaagent.height` | `true` | `false` désactive le module de hauteur (monde de 0 à 255) |
-| `deltaagent.height.legacyView` | vide | Classes qui reçoivent la vue 16 sections, séparées par des virgules (voir legacyView). Anciens noms : `deltaheight.legacyView`, `ngheight.legacyView` |
+| `deltaagent.height.legacyView` | vide | Classes qui reçoivent la vue 16 sections, séparées par des virgules (voir legacyView). Ancien nom : `deltaheight.legacyView` |
 | `deltaagent.height.guard` | `true` | `false` désactive la vérification de hauteur de la map quand le module est désactivé |
 | `deltaagent.ids` | `true` | `false` garde les limites vanilla (blocs 0-4095, objets 0-31999) ; les mondes marqués `NGItemIdFormat` ou `NGBlockIdFormat` sont alors refusés. `-Ddeltaagent.ids.capacity=off` marche encore |
 | `deltaagent.ids.capacity` | `131072` | Taille de départ des registres de blocs et d'objets, de 4096 à 16777216, arrondie à la puissance de 2 supérieure. Ils grandissent ensuite seuls si besoin. `mcpcj17.idCapacity` n'est plus lu |

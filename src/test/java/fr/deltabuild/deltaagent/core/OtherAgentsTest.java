@@ -23,19 +23,18 @@ class OtherAgentsTest {
     @Test
     void findsAgentsByPremainClassWhateverTheirFileName() throws Exception {
         agentJar("j17.jar", "gg.nationsglory.mcpcj17.McpcJava17Agent");
-        agentJar("height.jar", "fr.skhr.deltabuild.ngheight.NGHeightAgent");
+        agentJar("height.jar", "fr.deltabuild.deltaheight.DeltaHeightAgent");
         OtherAgents agents = OtherAgents.fromArguments(Arrays.asList(
                 "-Xmx4G", "-javaagent:j17.jar", "-javaagent:height.jar=debug"), dir.toFile());
         assertTrue(agents.has(OtherAgents.Known.MCPC_JAVA17));
-        assertEquals(OtherAgents.Known.NGHEIGHT, agents.heightAgent());
+        assertEquals(OtherAgents.Known.DELTAHEIGHT, agents.heightAgent());
     }
 
     @Test
-    void prefersDeltaHeightWhenBothHeightAgentsAreThere() throws Exception {
-        File ng = agentJar("ng.jar", "fr.skhr.deltabuild.ngheight.NGHeightAgent");
+    void findsAgentsByAbsolutePath() throws Exception {
         File delta = agentJar("delta.jar", "fr.deltabuild.deltaheight.DeltaHeightAgent");
         OtherAgents agents = OtherAgents.fromArguments(Arrays.asList(
-                "-javaagent:" + ng.getAbsolutePath(), "-javaagent:" + delta.getAbsolutePath()), new File("/nowhere"));
+                "-javaagent:" + delta.getAbsolutePath()), new File("/nowhere"));
         assertEquals(OtherAgents.Known.DELTAHEIGHT, agents.heightAgent());
     }
 

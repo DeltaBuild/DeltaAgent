@@ -9,7 +9,7 @@ import java.lang.instrument.Instrumentation;
 
 /**
  * World from Y -64 to Y 319 (24 sections), with the NGClient protocol. Ported from DeltaHeight 1.0.0,
- * plus the AntiXray patch of NGHeight and its per world superflat settings.
+ * plus the AntiXray patch and per world superflat settings.
  */
 public final class HeightModule {
 
@@ -60,7 +60,7 @@ public final class HeightModule {
         add(registry, "org.bukkit.craftbukkit.v1_6_R3.generator.CustomChunkGenerator", true, new Patches.LegacyViewPatch());
         add(registry, "fr.nationsglory.ngupgrades.common.utils.ChunkHelper", false, new Patches.LegacyViewPatch());
         add(registry, "calclavia.lib.utility.MovementUtility", false, new Patches.LegacyViewPatch());
-        String extra = Options.get(LEGACY_VIEW, "deltaheight.legacyView", "ngheight.legacyView");
+        String extra = Options.get(LEGACY_VIEW, "deltaheight.legacyView");
         if (extra != null) {
             for (String name : extra.split(",")) {
                 if (!name.trim().isEmpty()) {

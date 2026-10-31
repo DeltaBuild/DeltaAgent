@@ -855,7 +855,7 @@ final class Patches implements Opcodes {
         }
     }
 
-    // Spigot AntiXray: 24 sections, section i starts at Y (i << 4) - 64 (from NGHeight)
+    // Spigot AntiXray: 24 sections, section i starts at Y (i << 4) - 64
     static final class AntiXrayPatch implements Patch0 {
         public int apply(ClassNode cn) {
             MethodNode m = Asm.require(cn, "obfuscate", null);

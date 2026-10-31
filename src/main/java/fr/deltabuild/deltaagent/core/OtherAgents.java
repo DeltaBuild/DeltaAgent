@@ -17,7 +17,6 @@ public final class OtherAgents {
 
     public enum Known {
         MCPC_JAVA17("gg.nationsglory.mcpcj17.McpcJava17Agent", "mcpc-java17"),
-        NGHEIGHT("fr.skhr.deltabuild.ngheight.NGHeightAgent", "NGHeight"),
         DELTAHEIGHT("fr.deltabuild.deltaheight.DeltaHeightAgent", "DeltaHeight");
 
         final String premainClass;
@@ -93,9 +92,6 @@ public final class OtherAgents {
 
     /** The height agent already on the command line, or null. */
     public Known heightAgent() {
-        if (found.contains(Known.DELTAHEIGHT)) {
-            return Known.DELTAHEIGHT;
-        }
-        return found.contains(Known.NGHEIGHT) ? Known.NGHEIGHT : null;
+        return found.contains(Known.DELTAHEIGHT) ? Known.DELTAHEIGHT : null;
     }
 }

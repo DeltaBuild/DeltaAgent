@@ -332,8 +332,6 @@ public class Chunk {
     // Superflat below Y 0, set per world in deltaagent-flat.properties
 
     public static final String DH_FLAT_FILE = "deltaagent-flat.properties";
-    // Written by NGHeight, same keys: read when the world has no DeltaAgent file.
-    public static final String DH_OLD_FLAT_FILE = "ngheight-flat.properties";
     private static final int DH_VANILLA_BEDROCK = 7;
     /** bottom id, bottom meta, fill id, fill meta, replaceBedrockAt0 (1 or 0) */
     private static final int[] DH_FLAT_DEFAULT = {7, 0, 1, 0, 1};
@@ -394,9 +392,7 @@ public class Chunk {
             return DH_FLAT_DEFAULT;
         }
         File file = new File(dir, DH_FLAT_FILE);
-        if (!file.exists() && new File(dir, DH_OLD_FLAT_FILE).exists()) {
-            file = new File(dir, DH_OLD_FLAT_FILE);
-        } else if (!file.exists()) {
+        if (!file.exists()) {
             dhWriteFlatDefaults(file);
             return DH_FLAT_DEFAULT;
         }
