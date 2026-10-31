@@ -8,10 +8,14 @@ import org.bukkit.craftbukkit.v1_6_R3.CraftWorld;
  * Block metadata beyond the byte of the Bukkit API, for the patched WorldEdit. Values that fit
  * in a byte keep going through Bukkit; larger ones go to the world directly, with the same update
  * flags as CraftBlock.
+ *
+ * <p>Bukkit deprecates its ID and data methods (magic values), but they are the ones WorldEdit
+ * calls, so they stay.
  */
 public final class PluginBlocks {
 
     /** Block.setTypeIdAndData(type, (byte) data, physics) without the byte. */
+    @SuppressWarnings("deprecation")
     public static boolean setTypeIdAndData(Block block, int type, int data, boolean physics) {
         if (data >= 0 && data <= 0xFF) {
             return block.setTypeIdAndData(type, (byte) data, physics);
@@ -36,6 +40,7 @@ public final class PluginBlocks {
     }
 
     /** Block.setData((byte) data, physics) without the byte. */
+    @SuppressWarnings("deprecation")
     public static void setData(Block block, int data, boolean physics) {
         if (data >= 0 && data <= 0xFF) {
             block.setData((byte) data, physics);
