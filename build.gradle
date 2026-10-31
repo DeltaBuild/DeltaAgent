@@ -21,7 +21,7 @@ plugins {
 
 group = 'fr.deltabuild'
 // Replaced by the tag version when GitHub Actions builds a release (-PreleaseVersion=...).
-version = findProperty('releaseVersion') ?: '0.5.0-rc.1'
+version = findProperty('releaseVersion') ?: '1.0.0'
 
 def asmVersion = '9.7'
 
@@ -395,11 +395,12 @@ def replaceBin = tasks.register('replaceBin') {
 }
 
 // Tests read the replacement classes as the agent does. Tests on real MCPC+ classes run only when
-// libs/mcpc-srg.jar is there (not published).
+// libs/mcpc-srg.jar is there, those on WorldEdit 5.6 when libs/WorldEdit.jar is (neither published).
 test {
     dependsOn replaceBin
     classpath += files(replaceBinDir)
     systemProperty 'deltaagent.test.mcpcSrg', file('libs/mcpc-srg.jar').absolutePath
+    systemProperty 'deltaagent.test.worldEdit', file('libs/WorldEdit.jar').absolutePath
 }
 
 // MCPC+ jars, not published: only needed to regenerate the stubs (see tools/Deobf.java).

@@ -2,13 +2,13 @@
 
 Javaagent unique pour serveur MCPC+ 1.6.4 : Java 17, monde de Y -64 à Y 319 et identifiants larges de NGClient, sans toucher au jar du serveur ni aux mods.
 
-DeltaAgent remplace [mcpc-java17](https://github.com/Loyto-SKHR/mcpc-java17) et [DeltaHeight](https://github.com/DeltaBuild/DeltaHeight). Il avance par étapes ; chaque étape garde le serveur jouable.
+DeltaAgent remplace [mcpc-java17](https://github.com/Loyto-SKHR/mcpc-java17) et [DeltaHeight](https://github.com/DeltaBuild/DeltaHeight).
 
-## État : étape 4
+## Modules
 
 - **java17** : reprise de mcpc-java17 2.1.0 à l'identique (version de Java simulée, modules du JDK ouverts, `sun.reflect`, `Launch`, ASM 9.7).
 - **hauteur** : reprise de DeltaHeight 1.0.0 (24 sections, protocole NGClient), avec en plus le patch AntiXray, le superflat réglable par monde et la lecture des maps de NGHeight.
-- **IDs** : registres de blocs et d'objets qui grandissent jusqu'à 2^24 IDs comme dans NGClient, objets au-delà de 31 999 sauvegardés et transmis au format NGClient (`idExt`), chunks qui stockent des IDs de bloc sur 24 bits (`Add2`, `BlocksB3`) des métadonnées sur 16 bits (`DataAdd`, `Data2`) et des biomes sur 16 bits (`Biomes16`), envoyés aux joueurs dans les blocs de données de NGClient.
+- **IDs** : registres de blocs et d'objets qui grandissent jusqu'à 2^24 IDs comme dans NGClient, objets au-delà de 31 999 sauvegardés et transmis au format NGClient (`idExt`), chunks qui stockent des IDs de bloc sur 24 bits (`Add2`, `BlocksB3`), des métadonnées sur 16 bits (`DataAdd`, `Data2`) et des biomes sur 16 bits (`Biomes16`), envoyés aux joueurs dans les blocs de données de NGClient. WorldEdit, AsyncWorldEdit et VoxelSniper travaillent avec ces blocs.
 
 ## Prérequis
 
@@ -31,11 +31,11 @@ Les options `-XX:+UseConcMarkSweepGC` et `-XX:CMS...` n'existent plus en Java 17
 Au démarrage, la console doit afficher :
 
 ```
-[DeltaAgent/core] DeltaAgent 0.5.0-rc.1 on Java 17.0.x (modules: java17, height, ids).
+[DeltaAgent/core] DeltaAgent 1.0.0 on Java 17.0.x (modules: java17, height, ids).
 [DeltaAgent/java17] Java 17.0.x detected, reporting 1.7.0_80 to bypass the MCPC+ version check.
 [DeltaAgent/height] World extended to Y -64..319 (24 sections), NGClient protocol (NGNEID marker).
 [DeltaAgent/ids] Block and item registries start at 131072 IDs and grow up to 16777216. ...
-[DeltaAgent/core] Game transformer installed after cpw.mods.fml.common.asm.transformers.DeobfuscationTransformer (47 patched classes).
+[DeltaAgent/core] Game transformer installed after cpw.mods.fml.common.asm.transformers.DeobfuscationTransformer (50 patched classes).
 ...
 [DeltaAgent/height] Replaced net.minecraft.world.chunk.Chunk.
 [DeltaAgent/ids] Replaced net.minecraft.world.chunk.storage.ExtendedBlockStorage.
@@ -51,7 +51,7 @@ Retour en arrière : NGHeight et DeltaHeight relisent les maps sauvegardées par
 
 ### Venir de mcpc-java17 ou d'un DeltaAgent plus ancien
 
-Les maps des étapes 1 et 2 se chargent sans conversion. `-Dmcpcj17.idCapacity` n'est plus lu : les registres grandissent seuls. Les objets de 32 768 à 65 535 que ces versions sauvegardaient en `short` (relus en négatif, donc perdus) sont relus avec le bon ID si l'objet existe. Les mods qui s'arrêtaient à 65 535 (NGCore) enregistrent maintenant aussi leurs blocs au-delà.
+Les maps des versions précédentes se chargent sans conversion. `-Dmcpcj17.idCapacity` n'est plus lu : les registres grandissent seuls. Les objets de 32 768 à 65 535 que ces versions sauvegardaient en `short` (relus en négatif, donc perdus) sont relus avec le bon ID si l'objet existe. Les mods qui s'arrêtaient à 65 535 (NGCore) enregistrent maintenant aussi leurs blocs au-delà.
 
 ## Hauteur du monde
 
@@ -173,7 +173,7 @@ Pendant une même mise à jour de chunk, un joueur reçoit le chunk entier au pl
 **Limites.**
 
 - NGClient refuse un chunk de plus de 393 216 octets une fois décompressé. Avec la hauteur étendue, un chunk peut dépasser quand une vingtaine de ses sections ont `BlocksB3` (21 au plus si toutes ont aussi `Add` et `Add2`, 15 si elles ont en plus des métas au-delà de 15) : la pose qui ferait dépasser est refusée, et la console le signale. Un chunk déjà trop gros (posé par un autre serveur, directement dans la section, ou sans le module de hauteur avec tous les plans dans ses 16 sections) est signalé à l'envoi.
-- Bukkit passe la méta en `byte` (`Block.getData()`, `setData()`) et `ChunkSnapshot.getBlockData()` la lit sur 4 bits : au-delà, il faut passer par le code du serveur.
+- Bukkit passe la méta en `byte` : `setData()`, `setTypeIdAndData()` et `spawnFallingBlock()` la lisent de 0 à 255 (elle était signée, 200 devenait -56), `getData()` en rend les 8 bits du bas et `ChunkSnapshot.getBlockData()` les 4 bits du bas. Au-delà de 255, il faut passer par le code du serveur. `setTypeId()` garde la méta entière du bloc.
 - Particules de casse (Packet61), blocs qui tombent (Packet23) et événements de bloc (Packet54, coffres, pistons) gardent les limites vanilla : NGClient les lit sur 12 ou 16 bits.
 
 ### Biomes au-delà de 255
@@ -185,6 +185,47 @@ Chaque chunk garde l'octet bas de ses biomes dans `Biomes`, comme en vanilla, et
 - Génération : les générateurs (vanilla, mods, Bukkit) n'écrivent que l'octet bas. Juste après la génération d'un chunk, DeltaAgent complète `Biomes16` à partir de la source de biomes du monde, partout où son biome a le même octet bas. Rien ne change tant qu'aucun biome au-delà de 255 n'est enregistré.
 - Bukkit : `World.setBiome()` écrit l'ID complet.
 - Réseau : le bloc `NGBI` de Packet56 porte `Biomes16`, et un Packet51 de chunk entier part en Packet56 quand le chunk en a.
+
+### Plugins d'édition
+
+**WorldEdit 5.6 et AsyncWorldEdit** (qui passe par les sessions d'édition de WorldEdit) acceptent les IDs jusqu'à 16 777 215 et la méta jusqu'à 65 535 :
+
+- dans les commandes et les motifs (`//set 60035:2`, `//replace 3886:2 60035:2`, `//walls`, `//count`…), la limite était 4095 pour l'ID et 15 pour la méta ;
+- dans les blocs, le presse-papiers et l'annulation (`//copy`, `//paste`, `//rotate`, `//undo`) ;
+- dans l'accès au monde : la méta passe à côté du `byte` de l'API Bukkit.
+
+Les schematics gardent `Blocks`, `AddBlocks` (bits 8 à 11, comme WorldEdit l'écrit) et `Data` (méta, bits 0 à 7), et reçoivent seulement si un bloc en a besoin :
+
+| Tag | Contenu | Taille |
+| --- | --- | --- |
+| `AddBlocks2` | ID, bits 12 à 15, même ordre des demi-octets que `AddBlocks` | 1 octet pour 2 blocs |
+| `BlocksB3` | ID, bits 16 à 23 | 1 octet par bloc |
+| `Data2` | méta, bits 8 à 15 | 1 octet par bloc |
+
+Une schematic sans bloc large reste lisible par un WorldEdit d'origine ; un WorldEdit d'origine qui en lit une avec ces tags ne voit que les 12 bits bas des IDs.
+
+**VoxelSniper 5.168** garde déjà les IDs dans un `int` et passe par l'API Bukkit : avec la lecture non signée du `byte`, `/v 60035` et `/vi 200` marchent, annulation comprise. Sa méta reste limitée à 255 (`byte`).
+
+Au chargement, chaque classe de plugin modifiée est signalée par `[DeltaAgent/ids] Patched plugin class …`. Avec une autre version, si le code attendu n'est pas trouvé, la classe est laissée telle quelle et la console le signale.
+
+### Plugins pris en charge
+
+Ces plugins fonctionnent avec tout ce que DeltaAgent modifie : monde de Y -64 à 319, IDs de bloc et d'objet larges, métadonnées et biomes sur 16 bits. Ils ont été testés sur DeltaBuild avec NGClient.
+
+| Nom | Version |
+| --- | --- |
+| WorldEdit | 5.6 |
+| AsyncWorldEdit | 1.3 |
+| VoxelSniper | 5.168.7-SNAPSHOT |
+| WorldGuard | 5.9 |
+| Essentials | 2.12.2 |
+| HawkEye | 1.6.0 |
+| BanItem | 2.8 |
+| DeltaIsland | 1.2.0 |
+| DeltaTools | 1.0.1 |
+| NationsTools | 1.3.1 |
+| SaveIt | 1.1.5 |
+| ClearLag | 2.7.5 |
 
 ### Objets au-delà de 31 999
 
@@ -236,7 +277,7 @@ Il faut un JDK 17. Le build ne télécharge rien d'autre que Gradle et ses dépe
 ./gradlew build
 ```
 
-Le jar sort dans `build/libs/DeltaAgent.jar`, après les tests. La version (0.5.0-rc.1 par défaut) se change dans `build.gradle` ; sur un tag `vX.Y.Z`, GitHub Actions construit le jar avec la version du tag et le publie dans une release, et sur un tag `vX.Y.Z-rc.N` dans une pre-release.
+Le jar sort dans `build/libs/DeltaAgent.jar`, après les tests. La version (1.0.0 par défaut) se change dans `build.gradle` ; sur un tag `vX.Y.Z`, GitHub Actions construit le jar avec la version du tag et le publie dans une release, et sur un tag `vX.Y.Z-rc.N` dans une pre-release.
 
 ### Classes de remplacement et classes runtime
 
@@ -257,9 +298,9 @@ Deux bancs vérifient que DeltaAgent modifie les classes comme les agents qu'il 
 - `./gradlew compareMcpcJava17`, avec `libs/mcpc-java17-agent.jar` : les patchs Java 17 doivent être identiques (les IDs factices de mcpc-java17 ne sont plus comparés, le module d'IDs les a remplacés). Résultat attendu : `different: 0` et `Bundled ASM and Launch: identical`.
 - `./gradlew compareDeltaHeight`, avec `libs/DeltaHeight.jar` (1.0.0) : les patchs de hauteur doivent être identiques, sauf les changements voulus listés par le banc (`Chunk` et `AntiXray`). Résultat attendu : `unexpected differences: 0`.
 
-Quand `libs/mcpc-srg.jar` est présent, `./gradlew test` applique aussi les patchs d'IDs aux vraies classes de MCPC+, vérifie que la section remplacée garde tous les membres de celle de MCPC+, et teste les classes runtime avec les vraies classes NBT et `NibbleArray` (sauvegarde des plans, palettes, Packet56 relu comme NGClient le lit) ; sans lui (GitHub Actions), ces tests sont sautés.
+Quand `libs/mcpc-srg.jar` est présent, `./gradlew test` applique aussi les patchs d'IDs aux vraies classes de MCPC+, vérifie que la section remplacée garde tous les membres de celle de MCPC+, et teste les classes runtime avec les vraies classes NBT et `NibbleArray` (sauvegarde des plans, palettes, Packet56 relu comme NGClient le lit) ; sans lui (GitHub Actions), ces tests sont sautés. De même, avec `libs/WorldEdit.jar` (5.6, copié depuis le serveur), les patchs de WorldEdit sont appliqués et vérifiés.
 
-D'autres jars peuvent être ajoutés avec `-PbenchJars=chemin/a.jar,chemin/b.jar` (par exemple `WorldEdit.jar` et `VoxelSniper.jar` pour le banc de hauteur). Ces jars contiennent du code Minecraft ou d'autres projets : ils sont dans le `.gitignore` et ne doivent pas être publiés.
+D'autres jars peuvent être ajoutés avec `-PbenchJars=chemin/a.jar,chemin/b.jar` (par exemple `WorldEdit.jar` et `VoxelSniper.jar` pour le banc de hauteur). Ces jars contiennent du code Minecraft ou d'autres projets : ils ne doivent pas être publiés (`libs/WorldEdit.jar` est dans le `.gitignore`).
 
 ### Arborescence
 
@@ -269,13 +310,13 @@ src/main/java/fr/deltabuild/deltaagent/
   core/              options, journaux, sécurités, transformer de jeu
   java17/            module Java 17 (ex mcpc-java17)
   height/            module de hauteur (ex DeltaHeight), patchs des plugins
-  ids/               module d'IDs : registres, patchs (IdPatches, StoragePatches, BiomePatches), fenêtre Forge
+  ids/               module d'IDs : registres, patchs (IdPatches, StoragePatches, BiomePatches, PluginIdPatches), fenêtre Forge
 src/main/java/org/objectweb/asm/LegacyAsmApi.java   appelé par l'ASM patché servi au serveur
 src/replace/java/    classes remplacées en entier (Chunk, ExtendedBlockStorage)
 src/runtime/java/    classes chargées par le LaunchClassLoader :
                        ItemIds (objets), WorldFormats (level.dat), SectionIds (plans des sections),
                        ChunkBiomes (Biomes16), ChunkPackets (paquets de blocs), Snapshots, XrayIds,
-                       MapHistogram
+                       MapHistogram, PluginBlocks et PluginSchematics (WorldEdit)
 src/bench/java/      bancs de comparaison avec mcpc-java17 et DeltaHeight
 tools/               Deobf et Stubs
 libs/                launchwrapper 1.8 et stubs MCPC+ (compilation seulement)

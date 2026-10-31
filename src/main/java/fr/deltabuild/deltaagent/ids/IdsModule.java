@@ -54,6 +54,7 @@ public final class IdsModule {
         IdPatches.register(registry);
         StoragePatches.register(registry);
         BiomePatches.register(registry);
+        PluginIdPatches.register(registry);
         registry.addLoaderCheck(IdsModule::leaveOutOnNationsGloryServers);
         active = true;
         Log.info("ids", "Block and item registries start at " + capacity + " IDs and grow up to " + IdCapacity.LIMIT
@@ -74,6 +75,11 @@ public final class IdsModule {
             active = false;
             Log.info("ids", "The server has its own large ID support: ids module left out (" + removed + " patches).");
         }
+    }
+
+    /** Whether the module runs (on, and not left out for a NationsGlory server). */
+    static boolean active() {
+        return active;
     }
 
     /** Highest NGItemIdFormat this server can load: 1 is idExt. */

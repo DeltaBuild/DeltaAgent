@@ -7,6 +7,7 @@ import fr.deltabuild.deltaagent.core.PatchRegistry;
 import fr.deltabuild.deltaagent.core.Safety;
 import fr.deltabuild.deltaagent.height.HeightGuard;
 import fr.deltabuild.deltaagent.height.HeightModule;
+import fr.deltabuild.deltaagent.ids.IdsJvmTransformer;
 import fr.deltabuild.deltaagent.ids.IdsModule;
 import fr.deltabuild.deltaagent.java17.Java17;
 import java.lang.instrument.Instrumentation;
@@ -45,6 +46,7 @@ public final class DeltaAgent {
         }
         if (ids) {
             IdsModule.start(registry);
+            inst.addTransformer(new IdsJvmTransformer());
         } else {
             IdsModule.guardOnly(registry);
         }

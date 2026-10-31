@@ -55,6 +55,7 @@ class IdPatchesMcpcTest {
         CALLS.put("net.minecraft.world.chunk.storage.AnvilChunkLoader", new String[] {"SectionIds.read", "SectionIds.write",
             "ChunkBiomes.read", "ChunkBiomes.write"});
         CALLS.put("net.minecraft.world.biome.BiomeGenBase", new String[0]);
+        CALLS.put("org.bukkit.craftbukkit.v1_6_R3.block.CraftBlock", new String[] {"PluginBlocks.getData"});
         CALLS.put("net.minecraftforge.common.BiomeDictionary", new String[0]);
         CALLS.put("net.minecraft.world.chunk.Chunk", new String[] {"ChunkBiomes.biome"});
         CALLS.put("net.minecraft.world.gen.ChunkProviderServer", new String[] {"ChunkBiomes.generated"});
@@ -95,7 +96,7 @@ class IdPatchesMcpcTest {
         HeightModule.registerTargets(registry);
         IdsModule.start(registry);
         GameTransformer transformer = new GameTransformer(registry);
-        assertEquals(25, CALLS.size());
+        assertEquals(26, CALLS.size());
         List<String> problems = new ArrayList<String>();
         for (Map.Entry<String, String[]> entry : CALLS.entrySet()) {
             String name = entry.getKey();
