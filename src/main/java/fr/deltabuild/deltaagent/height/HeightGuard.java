@@ -24,8 +24,9 @@ import java.util.zip.InflaterInputStream;
  * off and no other agent handles that height. MCPC+ alone cannot read those chunks and would
  * generate them again.
  *
- * <p>Looks for the tag that NGHeight and DeltaHeight write into every chunk they save. Region files
- * are read before the server starts, so a hit stops it before a single chunk is loaded.
+ * <p>Looks for the tag that DeltaHeight writes into every chunk it saves (NGHeight on old test
+ * maps). Region files are read before the server starts, so a hit stops it before a single chunk
+ * is loaded.
  */
 public final class HeightGuard {
 

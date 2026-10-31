@@ -53,7 +53,7 @@ public final class CompareMcpcJava17 {
             for (int i = 2; i < args.length; i++) {
                 try (JarFile jar = new JarFile(args[i])) {
                     for (JarEntry entry : Collections.list(jar.entries())) {
-                        // .class.bin: replacement classes shipped by height agents (NGHeight, DeltaHeight).
+                        // .class.bin: replacement classes shipped by height agents (DeltaHeight).
                         if (!entry.getName().endsWith(".class") && !entry.getName().endsWith(".class.bin")) {
                             continue;
                         }
